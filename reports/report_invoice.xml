@@ -27,7 +27,6 @@
                             <!-- Fiscal Invoice Header -->
                             <h2 class="text-center" style="max-width: 100%; text-align: center; margin-top: 0 !important; padding-top: 0px;">
                                 <br/>
-                                <span t-field="o.currency_id.name"/>
                                 <span t-if="o.move_type == 'out_invoice' and o.state == 'posted' and o.partner_id.vat">FISCAL TAX INVOICE</span>
                                 <span t-elif="o.move_type == 'out_invoice' and o.state == 'posted'">FISCAL INVOICE</span>
                                 <span t-elif="o.move_type == 'out_invoice' and o.state == 'draft'">Draft Invoice</span>
@@ -164,7 +163,6 @@
                             <div class="oe_structure"/>
                             <h2 class="text-center" style="max-width: 100%; text-align: center; margin-top: 0 !important; padding-top: 0px;">
                                 <br/>
-                                <span t-field="o.currency_id.name"/>
                                 <span t-if="o.move_type == 'out_invoice' and o.state == 'posted'">INVOICE</span>
                                 <span t-elif="o.move_type == 'out_invoice' and o.state == 'draft'">Draft Invoice</span>
                                 <span t-elif="o.move_type == 'out_invoice' and o.state == 'cancel'">Cancelled Invoice</span>

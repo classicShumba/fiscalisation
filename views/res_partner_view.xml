@@ -6,7 +6,7 @@
         <field name="inherit_id" ref="base.view_partner_form"/>
         <field name="arch" type="xml">
             <xpath expr="//field[@name='vat']" position="after">
-                <field name="tin_number" string="TIN Number"/>
+                <field name="tin" string="TIN Number"/>
             </xpath>
         </field>
     </record>
