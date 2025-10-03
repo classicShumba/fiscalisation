@@ -115,8 +115,9 @@
         <field name="model">fiscal.device</field>
         <field name="arch" type="xml">
             <search>
-                <field name="name"/>
-                <field name="device_serial"/>
+                <group expand="1" string="Group By">
+                    <filter string="Name" name="name" domain="[]" context="{'group_by':'name'}"/>
+                </group>
             </search>
         </field>
     </record>

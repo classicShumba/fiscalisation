@@ -15,7 +15,7 @@
         <record id="admin_fiscalisation" model="res.groups">
             <field name="name">Fiscalisation Administrator</field>
             <field name="implied_ids" eval="[Command.link(ref('user_fiscalisation'))]"/>
-            <field name="user_ids" eval="[Command.link(ref('base.user_root')), Command.link(ref('base.user_admin'))]"/>
+            <field name="users" eval="[Command.link(ref('base.user_root')), Command.link(ref('base.user_admin'))]"/>
         </record>
     </data>
 </odoo>

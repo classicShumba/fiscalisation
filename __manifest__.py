@@ -10,9 +10,9 @@ This module provides integration with fiscal devices to ensure compliance with Z
 It allows for auto-management of fiscal device tokens and regular device status checks.
     """,
     'category': 'Accounting',
-    'version': '18.0.1.0.0',
-    'author': 'TELCO',
-    'website': 'https://live.telco.co.zw',
+    'version': '19.0.1.0.0',
+    'author': 'classic_shumba',
+    'website': 'https://classicshumba.co.zw',
     'license': 'OPL-1',
     'depends': [
         'base',
@@ -47,5 +47,5 @@ It allows for auto-management of fiscal device tokens and regular device status 
     # 'price': 0.0,
     # 'currency': 'USD',
     # 'live_test_url': 'https://live.telco.co.zw',
-    'support': 'customer-care@teamtelco.co.zw',
+    'support': 'info@classicshumba.co.zw',
 }

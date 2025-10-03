@@ -297,17 +297,7 @@
                                                 </div>
                                             </div>
                                         </div>
-                                        <div class="col-4 text-center">
-                                            <t t-if="o.qr_code">
-                                                <img t-if="o.qr_code" 
-                                                    t-att-src="'data:image/png;base64,%s' % o.qr_code.decode('utf-8')" 
-                                                    style="width:115px;height:115px"
-                                                    alt="Fiscal QR Code" />
-                                                <p class="text-center text-muted small mt-2">
-                                                    You can verify this receipt at<br /><span t-field="o.fdms_url"/>
-                                                </p>
-                                            </t>
-                                        </div>
+                                        
                                     </div>
                                 </div>
                             </div>
