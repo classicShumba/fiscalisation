@@ -295,12 +295,12 @@
                     
                     <!-- Totals Section with Footer Details Side by Side -->
                     <div class="clearfix mb-4">
-                        <div id="total" class="row">
+                        <div id="total" class="row g-2">
                             <!-- LEFT COLUMN: Footer Details (Credit Note Reason, Notes, Bank Details, QR Codes) -->
                             <div t-attf-class="#{'col-7' if report_type != 'html' else 'col-sm-7 col-md-7'}">
                                 <!-- Credit Note Reason -->
                                 <t t-if="o.move_type == 'out_refund'">
-                                    <div style="border: 1px solid #000; padding: 10px; margin-bottom: 15px; page-break-inside: avoid;">
+                                    <div style="margin-bottom: 15px; page-break-inside: avoid;">
                                         <strong>Reason for Credit Note:</strong><br/>
                                         <span t-esc="' '.join(o.ref.split(',')[1:]).strip() if ',' in o.ref else o.ref"/>
                                     </div>
@@ -308,7 +308,7 @@
                                 
                                 <!-- Debit Note Reason -->
                                 <t t-if="o.move_type == 'in_refund'">
-                                    <div style="border: 1px solid #000; padding: 10px; margin-bottom: 15px; page-break-inside: avoid;">
+                                    <div style="margin-bottom: 15px; page-break-inside: avoid;">
                                         <strong>Reason for Debit Note:</strong><br/>
                                         <span t-esc="' '.join(o.ref.split(',')[1:]).strip() if ',' in o.ref else o.ref"/>
                                     </div>
@@ -316,18 +316,18 @@
                                 
                                 <!-- Note Field -->
                                 <t t-if="o.narration">
-                                    <div style="border: 1px solid #000; padding: 10px; margin-bottom: 15px; page-break-inside: avoid;">
+                                    <div style="margin-bottom: 15px; page-break-inside: avoid;">
                                         <strong>Note:</strong><br/>
                                         <span t-field="o.narration"/>
                                     </div>
                                 </t>
                                 
                                 <!-- Bank Details -->
-                                <div style="border: 1px solid #000; padding: 10px; margin-bottom: 15px; font-size: 10px; page-break-inside: avoid;" t-if="o.company_id.partner_id.bank_ids">
+                                <div style="margin-bottom: 15px; font-size: 10px; page-break-inside: avoid;" t-if="o.company_id.partner_id.bank_ids">
                                     <strong style="display: block; margin-bottom: 10px; font-size: 11px;">BANK DETAILS</strong>
                                     <div class="row">
                                         <t t-foreach="o.company_id.partner_id.bank_ids" t-as="bank">
-                                            <div class="col-12" style="margin-bottom: 10px;">
+                                            <div class="col-6" style="margin-bottom: 10px;">
                                                 <strong>Bank: <span t-field="bank.bank_id.name"/></strong><br/>
                                                 Account Name: <span t-field="bank.acc_holder_name"/><br/>
                                                 Account Number: <span t-field="bank.acc_number"/><br/>
@@ -339,14 +339,14 @@
                                 </div>
 
                                 <!-- Payment Communication -->
-                                <div style="padding: 10px; margin-bottom: 15px; font-size: 10px; page-break-inside: avoid;" t-if="o.move_type in ('out_invoice', 'in_refund') and o.payment_reference">
+                                <!-- <div style="padding: 10px; margin-bottom: 15px; font-size: 10px; page-break-inside: avoid;" t-if="o.move_type in ('out_invoice', 'in_refund') and o.payment_reference">
                                     <p name="payment_communication" style="margin: 0;">
                                         <strong>Payment Communication:</strong> <span class="fw-bold" t-field="o.payment_reference"/>
                                         <t t-if="o.partner_bank_id">
                                             <br/><strong>Account:</strong> <span t-field="o.partner_bank_id" class="fw-bold"/>
                                         </t>
                                     </p>
-                                </div>
+                                </div> -->
 
                                 <!-- QR Code Section -->
                                 <t t-set="show_qr" t-value="o.display_qr_code and o.amount_residual"/>
