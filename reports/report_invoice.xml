@@ -315,7 +315,7 @@
                                 </t>
                                 
                                 <!-- Note Field -->
-                                <t t-if="o.narration">
+                                <t t-if="o.narration != False and o.narration.strip() != ''">
                                     <div style="margin-bottom: 15px; page-break-inside: avoid;">
                                         <strong>Note:</strong><br/>
                                         <span t-field="o.narration"/>
