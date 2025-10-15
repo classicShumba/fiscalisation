@@ -7,7 +7,7 @@
         <xpath expr="//div[hasclass('page', 'mb-4')]" position="replace">
             <div class="page mb-4">
                 <!-- Check if this is a FISCAL invoice (has device_id) -->
-                <t t-if="o.device_id">
+                <t t-if="o.device_id and o.fiscalised">
                     <!-- FISCAL INVOICE LAYOUT -->
                     
                     <!-- Fiscal Invoice Header -->
@@ -293,11 +293,99 @@
                         </tbody>
                     </table>
                     
-                    <!-- Totals Section -->
+                    <!-- Totals Section with Footer Details Side by Side -->
                     <div class="clearfix mb-4">
                         <div id="total" class="row">
-                            <div class="col-7"></div>
-                            <div class="col-5">
+                            <!-- LEFT COLUMN: Footer Details (Credit Note Reason, Notes, Bank Details, QR Codes) -->
+                            <div t-attf-class="#{'col-7' if report_type != 'html' else 'col-sm-7 col-md-7'}">
+                                <!-- Credit Note Reason -->
+                                <t t-if="o.move_type == 'out_refund'">
+                                    <div style="border: 1px solid #000; padding: 10px; margin-bottom: 15px; page-break-inside: avoid;">
+                                        <strong>Reason for Credit Note:</strong><br/>
+                                        <span t-esc="' '.join(o.ref.split(',')[1:]).strip() if ',' in o.ref else o.ref"/>
+                                    </div>
+                                </t>
+                                
+                                <!-- Debit Note Reason -->
+                                <t t-if="o.move_type == 'in_refund'">
+                                    <div style="border: 1px solid #000; padding: 10px; margin-bottom: 15px; page-break-inside: avoid;">
+                                        <strong>Reason for Debit Note:</strong><br/>
+                                        <span t-esc="' '.join(o.ref.split(',')[1:]).strip() if ',' in o.ref else o.ref"/>
+                                    </div>
+                                </t>
+                                
+                                <!-- Note Field -->
+                                <t t-if="o.narration">
+                                    <div style="border: 1px solid #000; padding: 10px; margin-bottom: 15px; page-break-inside: avoid;">
+                                        <strong>Note:</strong><br/>
+                                        <span t-field="o.narration"/>
+                                    </div>
+                                </t>
+                                
+                                <!-- Bank Details -->
+                                <div style="border: 1px solid #000; padding: 10px; margin-bottom: 15px; font-size: 10px; page-break-inside: avoid;" t-if="o.company_id.partner_id.bank_ids">
+                                    <strong style="display: block; margin-bottom: 10px; font-size: 11px;">BANK DETAILS</strong>
+                                    <div class="row">
+                                        <t t-foreach="o.company_id.partner_id.bank_ids" t-as="bank">
+                                            <div class="col-12" style="margin-bottom: 10px;">
+                                                <strong>Bank: <span t-field="bank.bank_id.name"/></strong><br/>
+                                                Account Name: <span t-field="bank.acc_holder_name"/><br/>
+                                                Account Number: <span t-field="bank.acc_number"/><br/>
+                                                <t t-if="bank.acc_type">Account Type: <span t-field="bank.acc_type"/><br/></t>
+                                                <t t-if="bank.bank_id.bic">Bank Branch: <span t-field="bank.bank_id.city"/> | Code: <span t-field="bank.bank_id.bic"/></t>
+                                            </div>
+                                        </t>
+                                    </div>
+                                </div>
+
+                                <!-- Payment Communication -->
+                                <div style="padding: 10px; margin-bottom: 15px; font-size: 10px; page-break-inside: avoid;" t-if="o.move_type in ('out_invoice', 'in_refund') and o.payment_reference">
+                                    <p name="payment_communication" style="margin: 0;">
+                                        <strong>Payment Communication:</strong> <span class="fw-bold" t-field="o.payment_reference"/>
+                                        <t t-if="o.partner_bank_id">
+                                            <br/><strong>Account:</strong> <span t-field="o.partner_bank_id" class="fw-bold"/>
+                                        </t>
+                                    </p>
+                                </div>
+
+                                <!-- QR Code Section -->
+                                <t t-set="show_qr" t-value="o.display_qr_code and o.amount_residual"/>
+                                <div t-if="not show_qr" name="qr_code_placeholder" class="oe_structure"/>
+
+                                <!-- Standard Payment QR Code -->
+                                <div id="qrcode" class="d-flex mb-3" style="page-break-inside: avoid;" t-if="show_qr">
+                                    <div class="qrcode me-3" id="qrcode_image">
+                                        <t t-set="qr_code_url" t-value="o._generate_qr_code(silent_errors=True)"/>
+                                        <p t-if="qr_code_url" class="position-relative mb-0">
+                                            <img t-att-src="qr_code_url" style="max-width: 150px;"/>
+                                            <img src="/account/static/src/img/Odoo_logo_O.svg" id="qrcode_odoo_logo" class="top-50 start-50 position-absolute bg-white border border-3 rounded-circle"/>
+                                        </p>
+                                    </div>
+                                    <div class="d-inline text-muted lh-sm fst-italic" id="qrcode_info" t-if="qr_code_url">
+                                        <p style="font-size: 10px;">Scan this QR Code with<br/>your banking application</p>
+                                    </div>
+                                </div>
+
+                                <!-- Payment Link QR Code -->
+                                <t t-set="show_link_qr" t-value="o.display_link_qr_code and o.amount_residual"/>
+                                <div t-if="show_link_qr" id="payment_link_qrcode" class="d-flex mb-3" style="page-break-inside: avoid;">
+                                    <t t-set="portal_qr_code" t-value="o._generate_portal_payment_qr()"/>
+                                    <div class="qrcode me-3 position-relative" id="qrcode_image">
+                                        <a t-att-href="o._get_portal_payment_link()" target="_blank" class="top-0 start-0 position-absolute w-100 h-100 z-1"/>
+                                        <p class="position-relative mb-0">
+                                            <img t-att-src="portal_qr_code" style="max-width: 150px;"/>
+                                            <img src="/account/static/src/img/Odoo_logo_O.svg" id="qrcode_odoo_logo" class="top-50 start-50 position-absolute bg-white border border-3 rounded-circle"/>
+                                        </p>
+                                    </div>
+                                    <div class="d-inline lh-sm" id="qrcode_info" t-if="portal_qr_code">
+                                        <p class="fw-bold mb-0" style="font-size: 10px;">PAY IN A FLASH!</p>
+                                        <p class="text-muted fst-italic" style="font-size: 9px;">Scan the QR code<br/>or click to pay online</p>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- RIGHT COLUMN: Totals Table -->
+                            <div t-attf-class="#{'col-5' if report_type != 'html' else 'col-sm-5 col-md-5'}">
                                 <table class="table table-sm" style="page-break-inside: avoid;">
                                     <t t-set="tax_totals" t-value="o.tax_totals"/>
                                     <t t-set="currency" t-value="o.currency_id"/>
@@ -396,95 +484,6 @@
                                         </t>
                                     </t>
                                 </table>
-                            </div>
-                        </div>
-                        
-                        <!-- Footer Section (Credit/Debit Note Reason & Notes) -->
-                        <div class="row align-items-start" style="margin-top: 20px !important;">
-                            <div t-attf-class="#{'col-8' if report_type != 'html' else 'col-sm-9 col-md-8'}">
-                                <!-- Credit Note Reason -->
-                                <t t-if="o.move_type == 'out_refund'">
-                                    <div style="border: 1px solid #000; padding: 10px; margin-top: 20px;">
-                                        <strong>Reason for Credit Note:</strong><br/>
-                                        <span t-esc="' '.join(o.ref.split(',')[1:]).strip() if ',' in o.ref else o.ref"/>
-                                    </div>
-                                </t>
-                                
-                                <!-- Debit Note Reason -->
-                                <t t-if="o.move_type == 'in_refund'">
-                                    <div style="border: 1px solid #000; padding: 10px; margin-top: 20px;">
-                                        <strong>Reason for Debit Note:</strong><br/>
-                                        <span t-esc="' '.join(o.ref.split(',')[1:]).strip() if ',' in o.ref else o.ref"/>
-                                    </div>
-                                </t>
-                                
-                                <!-- Note Field -->
-                                <t t-if="o.narration">
-                                    <div style="border: 1px solid #000; padding: 10px; margin-top: 20px;">
-                                        <strong>Note:</strong><br/>
-                                        <span t-field="o.narration"/>
-                                    </div>
-                                </t>
-                            </div>
-                        </div>
-                        
-                        <!-- Bank Details -->
-                        <div style="border-top: 2px solid #000; padding-top: 10px; margin-top: 20px; font-size: 10px;" t-if="o.company_id.partner_id.bank_ids">
-                            <div class="row">
-                                <t t-foreach="o.company_id.partner_id.bank_ids" t-as="bank">
-                                    <div class="col-6">
-                                        <strong>Bank: <span t-field="bank.bank_id.name"/></strong><br/>
-                                        Account Name: <span t-field="bank.acc_holder_name"/><br/>
-                                        Account Number: <span t-field="bank.acc_number"/><br/>
-                                        <t t-if="bank.acc_type">Account Type: <span t-field="bank.acc_type"/><br/></t>
-                                        <t t-if="bank.bank_id.bic">Bank Branch: <span t-field="bank.bank_id.city"/> | Code: <span t-field="bank.bank_id.bic"/></t>
-                                    </div>
-                                </t>
-                            </div>
-                        </div>
-
-                        <!-- Payment Communication -->
-                        <div class="mb-3" style="font-size: 10px; margin-top: 10px;" t-if="o.move_type in ('out_invoice', 'in_refund') and o.payment_reference">
-                            <p name="payment_communication">
-                                Payment Communication: <span class="fw-bold" t-field="o.payment_reference"/>
-                                <t t-if="o.partner_bank_id">
-                                    <br/> on this account: <span t-field="o.partner_bank_id" class="fw-bold"/>
-                                </t>
-                            </p>
-                        </div>
-
-                        <!-- QR Code Section -->
-                        <t t-set="show_qr" t-value="o.display_qr_code and o.amount_residual"/>
-                        <div t-if="not show_qr" name="qr_code_placeholder" class="oe_structure"/>
-
-                        <!-- Standard Payment QR Code -->
-                        <div id="qrcode" class="d-flex mb-3 avoid-page-break-inside" t-if="show_qr">
-                            <div class="qrcode me-3" id="qrcode_image">
-                                <t t-set="qr_code_url" t-value="o._generate_qr_code(silent_errors=True)"/>
-                                <p t-if="qr_code_url" class="position-relative mb-0">
-                                    <img t-att-src="qr_code_url"/>
-                                    <img src="/account/static/src/img/Odoo_logo_O.svg" id="qrcode_odoo_logo" class="top-50 start-50 position-absolute bg-white border border-3 rounded-circle"/>
-                                </p>
-                            </div>
-                            <div class="d-inline text-muted lh-sm fst-italic" id="qrcode_info" t-if="qr_code_url">
-                                <p>Scan this QR Code with<br/>your banking application</p>
-                            </div>
-                        </div>
-
-                        <!-- Payment Link QR Code -->
-                        <t t-set="show_link_qr" t-value="o.display_link_qr_code and o.amount_residual"/>
-                        <div t-if="show_link_qr" id="payment_link_qrcode" class="d-flex mb-3 avoid-page-break-inside">
-                            <t t-set="portal_qr_code" t-value="o._generate_portal_payment_qr()"/>
-                            <div class="qrcode me-3 position-relative" id="qrcode_image">
-                                <a t-att-href="o._get_portal_payment_link()" target="_blank" class="top-0 start-0 position-absolute w-100 h-100 z-1"/>
-                                <p class="position-relative mb-0">
-                                    <img t-att-src="portal_qr_code"/>
-                                    <img src="/account/static/src/img/Odoo_logo_O.svg" id="qrcode_odoo_logo" class="top-50 start-50 position-absolute bg-white border border-3 rounded-circle"/>
-                                </p>
-                            </div>
-                            <div class="d-inline lh-sm" id="qrcode_info" t-if="portal_qr_code">
-                                <p class="fw-bold mb-0">PAY IN A FLASH!</p>
-                                <p class="text-muted fst-italic">Scan the QR code<br/>or click to pay online</p>
                             </div>
                         </div>
                     </div>
