@@ -11,7 +11,7 @@
         </field>
     </record>
 
-    <!-- <record id="product_product_form_view_inherit_fiscalisation" model="ir.ui.view">
+    <record id="product_product_form_view_inherit_fiscalisation" model="ir.ui.view">
         <field name="name">product.product.form.inherit.fiscalisation</field>
         <field name="model">product.product</field>
         <field name="inherit_id" ref="product.product_normal_form_view"/>
@@ -20,6 +20,6 @@
                 <field name="hs_code" string="HS Code"/>
             </xpath>
         </field>
-    </record> -->
+    </record>
 </odoo>
 
