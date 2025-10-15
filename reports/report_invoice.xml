@@ -314,17 +314,9 @@
                                     </div>
                                 </t>
                                 
-                                <!-- Note Field -->
-                                <t t-if="o.narration != False and o.narration.strip() != ''">
-                                    <div style="margin-bottom: 15px; page-break-inside: avoid;">
-                                        <strong>Note:</strong><br/>
-                                        <span t-field="o.narration"/>
-                                    </div>
-                                </t>
-                                
                                 <!-- Bank Details -->
                                 <div style="margin-bottom: 15px; font-size: 10px; page-break-inside: avoid;" t-if="o.company_id.partner_id.bank_ids">
-                                    <strong style="display: block; margin-bottom: 10px; font-size: 11px;">BANK DETAILS</strong>
+                                    <strong style="display: block; margin-bottom: 10px; font-size: 13px;">BANK DETAILS</strong>
                                     <div class="row">
                                         <t t-foreach="o.company_id.partner_id.bank_ids" t-as="bank">
                                             <div class="col-6" style="margin-bottom: 10px;">
@@ -347,6 +339,14 @@
                                         </t>
                                     </p>
                                 </div> -->
+
+                                <!-- Note Field -->
+                                <t t-if="o.narration != False and o.narration.strip() != ' '">
+                                    <div style="margin-bottom: 15px; page-break-inside: avoid;">
+                                        <strong>Note:</strong><br/>
+                                        <span t-field="o.narration"/>
+                                    </div>
+                                </t>
 
                                 <!-- QR Code Section -->
                                 <t t-set="show_qr" t-value="o.display_qr_code and o.amount_residual"/>
