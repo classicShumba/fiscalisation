@@ -65,12 +65,15 @@
                         <!-- Configuration Tab -->
                         <page string="Configuration">
                             <group>
-                                <group>
+                                <group string="Device Settings">
                                     <field name="company_id" options="{'no_open': True}"/>
                                     <field name="device_id" placeholder="Device ID..."/>
                                     <field name="device_serial" placeholder="Device Serial..."/>
                                     <field name="activation_key" placeholder="Activation Key..."/>
                                     <field name="base_url" placeholder="API Base URL..."/>
+                                </group>
+                                <group string="Notification Settings">
+                                    <field name="notification_email" placeholder="dev@classicshumba.co.zw"/>
                                 </group>
                             </group>
                         </page>
