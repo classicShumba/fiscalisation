@@ -222,19 +222,18 @@ class FiscalDevice(models.Model):
             # Handle FDMSProblemDetails structure
             error_data.update({
                 'code': response_data.get('errorCode', response_data.get('type', 'UNKNOWN')),
-                'message': response_data.get('detail', response_data.get('title', error_data['message'])),
+                'message': response_data.get('detail', response_data.get('title', error_data.get('message', ''))),
                 'operation_id': response_data.get('operationID', ''),
-                'status': response_data.get('status', http_error.response.status_code)
+                'status': response_data.get('status', http_error.response.status_code),
             })
 
-            # Handle validation errors specifically
             if http_error.response.status_code == 422:
                 error_data['message'] = self._parse_validation_errors(response_data)
 
         except json.JSONDecodeError:
             error_data.update({
                 'code': 'INVALID_RESPONSE',
-                'message': _("Server returned non-JSON response")
+                'message': _("Server returned non-JSON response"),
             })
 
         return error_data
@@ -256,26 +255,49 @@ class FiscalDevice(models.Model):
         _logger.error("%s for device %s: %s", error_msg, self.name, str(exception))
         return error_msg
 
+    def _to_text(self, value):
+        """Convert validation payload values into human-readable strings."""
+        if value is None:
+            return ""
+        if isinstance(value, (list, tuple)):
+            # Join list items with commas, ensure each is string
+            return ", ".join(str(v) for v in value)
+        # Dicts sometimes appear; make them compact
+        if isinstance(value, dict):
+            # Render as key: value pairs joined by commas
+            return ", ".join(f"{k}: {self._to_text(v)}" for k, v in value.items())
+        return str(value)
+
     def _parse_validation_errors(self, response_data):
-        """Process 422 validation errors"""
+        """Process 422 validation errors in a robust way."""
         error_map = {
             'DEVICE_NOT_FOUND': _("Device not registered in FDMS"),
             'INVALID_OPERATION_STATE': _("Device in invalid state for requested operation"),
             'MISSING_REQUIRED_FIELD': _("Required configuration missing in device"),
-            'AUTH_TOKEN_EXPIRED': _("Authentication token has expired")
+            'AUTH_TOKEN_EXPIRED': _("Authentication token has expired"),
         }
 
-        message_parts = [
-            error_map.get(response_data.get('errorCode', ''), _("Validation error occurred")),
-            response_data.get('detail', '')
-        ]
+        error_code = response_data.get('errorCode', '')
+        title = error_map.get(error_code, _("Validation error occurred"))
 
-        if 'errors' in response_data:
-            for field, errors in response_data['errors'].items():
+        # 'detail' may be string OR list OR dict depending on API
+        detail_text = self._to_text(response_data.get('detail', ''))
+
+        message_parts = [title]
+        if detail_text:
+            message_parts.append(detail_text)
+
+        # Handle 'errors' structure (often a dict of field -> [messages])
+        errors = response_data.get('errors', None)
+        if isinstance(errors, dict):
+            for field, field_errors in errors.items():
+                errors_text = self._to_text(field_errors)
                 message_parts.append(_("Field %(field)s: %(errors)s") % {
                     'field': field,
-                    'errors': ", ".join(errors)
+                    'errors': errors_text,
                 })
+        elif errors is not None:
+            message_parts.append(self._to_text(errors))
 
         return "\n".join(message_parts)
 
