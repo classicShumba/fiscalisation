@@ -20,8 +20,8 @@ class FiscalDevice(models.Model):
     device_id = fields.Integer(string='Device ID', required=True, tracking=True)
     device_serial = fields.Char(string='Device Serial', required=True, tracking=True)
     activation_key = fields.Char(string='Activation Key', required=True, tracking=True)
-    base_url = fields.Char(string='API Base URL', default='https://fisc.classicshumba.co.zw', required=True, tracking=True)
-    fdms_url = fields.Char(string='API Base URL', compute='_compute_fdms_url', required=True, tracking=True)
+    base_url = fields.Char(string='Fisc API Base URL', default='https://fisc.classicshumba.co.zw', required=True, tracking=True)
+    fdms_url = fields.Char(string='FDMS API Base URL', compute='_compute_fdms_url', required=True, tracking=True)
     access_token = fields.Char(string='Access Token', copy=False)
     refresh_token = fields.Char(string='Refresh Token', copy=False)
     token_expiry = fields.Datetime(string='Token Expiry')
@@ -39,9 +39,18 @@ class FiscalDevice(models.Model):
     last_error_message = fields.Text(string='Last Error Message', readonly=True)
     last_error_status = fields.Integer(string='Last HTTP Status', readonly=True)
 
-    _sql_constraints = [
-        ('company_device_unique', 'unique(company_id, device_id)', 'Device ID must be unique per company!'),
-    ]
+    # Notification configuration
+    notification_email = fields.Char(
+        string='Notification Email',
+        default='dev@classicshumba.co.zw',
+        help='Email address to receive fiscal device error notifications. Leave empty to use company users.',
+        readonly=True
+    )
+
+    _unique_fisc_device = models.Constraint(
+        'UNIQUE(company_id, device_id)',
+        'Device ID must be unique per company!'
+    )
     
     @api.depends('fiscal_day_status')
     def _compute_is_day_open(self):
@@ -57,7 +66,35 @@ class FiscalDevice(models.Model):
                 record.fdms_url = 'https://fdms.zimra.co.zw'
             else:
                 record.fdms_url = 'https://fdmstest.zimra.co.zw'
-    
+
+    def _get_notification_recipients(self):
+        """
+        Get partner IDs for error notifications.
+        Uses notification_email if set, otherwise falls back to company users.
+        """
+        self.ensure_one()
+
+        if self.notification_email:
+            # Find or create partner with the notification email
+            partner = self.env['res.partner'].sudo().search([
+                ('email', '=', self.notification_email)
+            ], limit=1)
+
+            if not partner:
+                # Create a new partner for this notification email
+                partner = self.env['res.partner'].sudo().create({
+                    'name': 'Fiscal Device Notification',
+                    'email': self.notification_email,
+                    'company_id': self.company_id.id,
+                    'type': 'contact',
+                })
+                _logger.info("Created notification partner for email: %s", self.notification_email)
+
+            return partner.ids
+        else:
+            # Fallback to company users
+            return self.company_id.user_ids.partner_id.ids
+
     def action_manual_token_refresh(self):
         """Manual token refresh with user feedback"""
         self.ensure_one()
@@ -396,7 +433,7 @@ class FiscalDevice(models.Model):
                 device.message_post(
                     body=_("Automatic status check failed: %s") % str(e),
                     subject=_("Status Check Error"),
-                    partner_ids=device.company_id.user_ids.partner_id.ids
+                    partner_ids=device._get_notification_recipients()
                 )
 
     def _cron_refresh_tokens(self):
@@ -411,7 +448,7 @@ class FiscalDevice(models.Model):
                 device.message_post(
                     body=_("Automatic token refresh failed: %s") % str(e),
                     subject=_("Token Refresh Error"),
-                    partner_ids=device.company_id.user_ids.partner_id.ids
+                    partner_ids=device._get_notification_recipients()
                 )
     # Helper methods
     def _show_notification(self, title, message, is_error=False):
