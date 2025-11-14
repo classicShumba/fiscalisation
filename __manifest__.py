@@ -28,6 +28,7 @@ It allows for auto-management of fiscal device tokens and regular device status 
         'views/templates.xml',
         'views/account_move_views.xml',
         'reports/report_invoice.xml',
+        'reports/report_quotation.xml',
         'data/cron_data.xml',
         'views/res_partner_view.xml',
         'views/product_view.xml'
