@@ -1,0 +1,44 @@
+<odoo>
+  <data>
+    <template id="report_saleorder_document_custom" inherit_id="sale.report_saleorder_document">
+
+      <xpath expr="//div[@t-if='not doc.signature']" position="before">
+
+        <div class="oe_structure mt-3"></div>
+        <div class="mt-4" style="margin-bottom: 15px; page-break-inside: avoid;"
+          t-if="doc.company_id.partner_id.bank_ids">
+          <h4 class="fw-bold">Banking Details</h4>
+          <div class="row">
+            <t t-foreach="doc.company_id.partner_id.bank_ids" t-as="bank">
+              <div class="col-6" style="margin-bottom: 10px;">
+                <strong>Bank: <span t-field="bank.bank_id.name" /></strong><br /> Account Name: <span
+                  t-field="bank.acc_holder_name" /><br /> Account Number: <span
+                  t-field="bank.acc_number" /><br />
+                                                <t t-if="bank.acc_type">Account Type: <span
+                    t-field="bank.currency_id.name" /><br /></t>
+                                                <t t-if="bank.bank_id.bic">Bank
+                Branch: <span t-field="bank.bank_id.city" /> | Code: <span
+                    t-field="bank.bank_id.bic" /></t>
+              </div>
+            </t>
+          </div>
+        </div>
+
+        <div class="oe_structure mt-3"></div>
+        <div name="payment_terms_section">
+          <h4 class="fw-bold">Terms &amp; Conditions</h4>
+          <ol class="ms-3" style="padding-left: 1.5rem;">
+            <li class="mb-2">80% Deposit on all projects and balance on completion.</li>
+            <li class="mb-2">Prices are subject to change at anytime.</li>
+            <li class="mb-2">7 day waiting period for items not in stock.</li>
+            <li class="mb-2">24 months warranty (excludes electrical surges and lightning).</li>
+            <li class="mb-2">Quotation excludes all civil work and fabrication.</li>
+            <li class="mb-2">Goods remain the property of Iron Block Security until full paid.</li>
+          </ol>
+        </div>
+
+      </xpath>
+
+    </template>
+  </data>
+</odoo>
