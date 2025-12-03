@@ -203,6 +203,11 @@ class AccountMove(models.Model):
             raise UserError(_("Customer information is required for fiscalisation"))
             
         if partner.vat and partner.tin:
+            # Extract only the first email if multiple emails are present
+            email = partner.email or ""
+            if "," in email:
+                email = email.split(",")[0].strip()
+                
             buyer_data = {
                 "buyerRegisterName": partner.name,
                 "buyerTradeName": partner.commercial_partner_id.name,
@@ -210,7 +215,7 @@ class AccountMove(models.Model):
                 "buyerTIN": self.customer_tin,
                 "buyerContacts": {
                     "phoneNo": partner.phone or "",
-                    "email": partner.email or ""
+                    "email": email
                 },
                 "buyerAddress": {
                     "province": partner.state_id.name or "",
@@ -223,7 +228,7 @@ class AccountMove(models.Model):
         else:
             buyer_data = None
         
-        return buyer_data 
+        return buyer_data
 
     def _prepare_receipt_lines(self):
         inv_lines = self.env['account.move.line'].search([
