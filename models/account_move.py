@@ -202,7 +202,7 @@ class AccountMove(models.Model):
         if not partner:
             raise UserError(_("Customer information is required for fiscalisation"))
             
-        if partner.vat and partner.tin:
+        if partner.tin:
             # Extract only the first email if multiple emails are present
             email = partner.email or ""
             if "," in email:
