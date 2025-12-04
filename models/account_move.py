@@ -12,8 +12,8 @@ _logger = logging.getLogger(__name__)
 class AccountMove(models.Model):
     _inherit = 'account.move'
 
-    customer_vat = fields.Char(string='Customer VAT', compute='_compute_customer_vat', store=True)
-    customer_tin = fields.Char(string='Customer TIN', compute='_compute_customer_tin', store=True)
+    customer_vat = fields.Char(string='Customer VAT', related='partner_id.vat', readonly=True, store=True)
+    customer_tin = fields.Char(string='Customer TIN', related='partner_id.tin', readonly=True, store=True)
     receipt_type = fields.Char(string='Receipt Type', compute='_compute_receipt_type')
     qr_url = fields.Char(string='QR Code URL', readonly=True, copy=False)
     qr_code = fields.Binary(string='QR Code', compute='_compute_qr_code', copy=False)
@@ -28,15 +28,17 @@ class AccountMove(models.Model):
     fiscalised = fields.Boolean(string='Fiscalised', readonly=True, default=False, copy=False)
 
 
-    @api.depends('partner_id')
+    @api.depends('move_type', 'line_ids.partner_id')
     def _compute_customer_vat(self):
         for invoice in self:
-            invoice.customer_vat = invoice.partner_id.vat or ''
+            partner = invoice.partner_id or (invoice.line_ids.partner_id[0] if invoice.line_ids.partner_id else None)
+            invoice.customer_vat = partner.vat or '' if partner else ''
 
-    @api.depends('partner_id')
+    @api.depends('move_type', 'line_ids.partner_id')
     def _compute_customer_tin(self):
         for invoice in self:
-            invoice.customer_tin = invoice.partner_id.tin or ''
+            partner = invoice.partner_id or (invoice.line_ids.partner_id[0] if invoice.line_ids.partner_id else None)
+            invoice.customer_tin = partner.tin or '' if partner else ''
 
     @api.depends('move_type')
     def _compute_receipt_type(self):
@@ -116,7 +118,8 @@ class AccountMove(models.Model):
         try:
             payload = self._prepare_fiscal_payload()
             _logger.info("Fiscal payload prepared: %s", payload)
-            # raise UserError(_("Fiscal payload prepared: %s", payload))
+            # _logger.info(f'Buyer Data: {self.customer_tin}, {self.customer_vat}')
+            # raise UserError(_("Fiscal payload prepared: "))
             
             response = device._api_request('/api/v1/receipts', payload=payload)
             _logger.info("API response received: %s", response)
@@ -207,8 +210,8 @@ class AccountMove(models.Model):
             buyer_data = {
                 "buyerRegisterName": partner.name,
                 "buyerTradeName": partner.commercial_partner_id.name,
-                "vatNumber": self.customer_vat,
-                "buyerTIN": self.customer_tin,
+                "vatNumber": self.customer_vat or self.partner_id.vat,
+                "buyerTIN": self.customer_tin or self.partner_id.tin,
                 "buyerContacts": {
                     "phoneNo": partner.phone or "",
                     "email": partner.email or ""

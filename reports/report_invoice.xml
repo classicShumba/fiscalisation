@@ -45,8 +45,8 @@
                         <!-- Customer Details -->
                         <div t-attf-class="#{'col-6' if report_type != 'html' else 'col-sm-7 col-md-6'}">
                             <span t-field="o.partner_id.name"/><br/>
-                            TIN: <span t-field="o.customer_tin"/><br/>
-                            VAT: <span t-field="o.customer_vat"/><br/>
+                            TIN: <span t-field="o.partner_id.tin"/><br/>
+                            VAT: <span t-field="o.partner_id.vat"/><br/>
                             <span t-field="o.partner_id.street"/> <span t-field="o.partner_id.street2"/><br/>
                             <span t-field="o.partner_id.city"/>, <span t-field="o.partner_id.country_id.name"/><br/>
                             <span t-field="o.partner_id.phone"/><br/>
