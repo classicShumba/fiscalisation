@@ -13,13 +13,13 @@
                         class="btn btn-info mr-3"
                         type="object"
                         style="background:rgba(46, 210, 162,0.2);"
-                        invisible="fiscalised or state != 'posted' or device_id == False" 
+                        invisible="fiscalised or state != 'posted' or device_id == False or move_type not in ('out_invoice','out_refund')" 
                         />
                 </xpath>
 
                 <!-- Add a new page in the notebook for Fiscal Information -->
                 <xpath expr="//notebook" position="inside">
-                    <page string="Fiscal Information" invisible="fiscalised == False">
+                    <page string="Fiscal Information" invisible="fiscalised == False or move_type not in ('out_invoice','out_refund')">
                         <group>
                             <field name="qr_url" readonly="1"/>
                             <field name="fiscal_date" readonly="True"/>
