@@ -62,7 +62,7 @@ class FiscalDevice(models.Model):
     def _compute_fdms_url(self):
         """FDMS URL for verification"""
         for record in self:
-            if record.base_url == 'https://fisc.gethost.co.zw':
+            if record.base_url in ['https://fisc.gethost.co.zw','https://fiscal.terralith.co.zw']:
                 record.fdms_url = 'https://fdms.zimra.co.zw'
             else:
                 record.fdms_url = 'https://fdmstest.zimra.co.zw'
