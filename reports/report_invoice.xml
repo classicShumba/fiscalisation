@@ -64,7 +64,7 @@
                                     <strong>Fiscalisation Date:</strong> <span t-field="o.fiscal_date"/><br/>
                                 </span>
                                 <strong>Invoice Date:</strong> <span t-field="o.invoice_date"/><br/>
-                                <strong>Terms of Payment:</strong> Payment Upon Invoice<br/>
+                                <t t-if="o.invoice_payment_term_id"><strong>Terms of Payment:</strong> <span t-field="o.invoice_payment_term_id.name"/><br/></t>
                                 <strong>Due Date:</strong> <span t-field="o.invoice_date_due"/><br/>
                             </t>
                             
@@ -323,7 +323,7 @@
                                                 <strong>Bank: <span t-field="bank.bank_id.name"/></strong><br/>
                                                 Account Name: <span t-field="bank.acc_holder_name"/><br/>
                                                 Account Number: <span t-field="bank.acc_number"/><br/>
-                                                <t t-if="bank.acc_type">Account Type: <span t-field="bank.currency_id.name"/><br/></t>
+                                                <t t-if="bank.currency_id">Currency: <span t-field="bank.currency_id.name"/><br/></t>
                                                 <t t-if="bank.bank_id.bic">Bank Branch: <span t-field="bank.bank_id.city"/> | Code: <span t-field="bank.bank_id.bic"/></t>
                                             </div>
                                         </t>
