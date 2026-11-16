@@ -48,4 +48,17 @@
             <field name="nextcall" eval="(datetime.now().replace(hour=23, minute=30, second=0) + timedelta(days=(datetime.now().hour >= 23 and datetime.now().minute >= 30) and 1 or 0)).strftime('%Y-%m-%d %H:%M:%S')"/>
         </record>
     </data>
+
+    <!-- Automatic fiscalisation queue (separate noupdate block so it is created on upgrade) -->
+    <data noupdate="1">
+        <record id="ir_cron_fiscalise_queue" model="ir.cron">
+            <field name="name">Fiscalisation: Submit Queued Documents</field>
+            <field name="model_id" ref="account.model_account_move"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_fiscalise_queue()</field>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
 </odoo>

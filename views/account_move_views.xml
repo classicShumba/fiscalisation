@@ -6,33 +6,117 @@
             <field name="model">account.move</field>
             <field name="inherit_id" ref="account.view_move_form" />
             <field name="arch" type="xml">
-                <!-- Replace handle_fiscalize button with fiscalize button -->
+                <!-- Confirming from the form runs the fiscal pre-checks strictly (blocks on issues) -->
+                <xpath expr="//header/button[@name='action_post'][contains(@invisible, &quot;move_type == 'entry' or&quot;)]" position="attributes">
+                    <attribute name="context">{'validate_analytic': True, 'disable_abnormal_invoice_detection': False, 'fiscal_preflight_strict': True}</attribute>
+                </xpath>
+
                 <xpath expr="//header" position="inside">
                     <button name="action_fiscalise_invoice"
-                        string="Fiscalise"
+                        string="Fiscalise Now"
                         class="btn btn-info mr-3"
                         type="object"
                         style="background:rgba(46, 210, 162,0.2);"
-                        invisible="fiscalised or state != 'posted' or device_id == False or move_type not in ('out_invoice','out_refund')" 
+                        invisible="fiscalised or state != 'posted' or device_id == False or move_type not in ('out_invoice','out_refund') or fiscal_state not in ('not_applicable', 'awaiting_payment')"
+                        confirm="Submit this document to ZIMRA now? A fiscalised document can only be corrected with a credit or debit note."
+                        />
+                    <button name="action_fiscal_retry"
+                        string="Retry Fiscalisation"
+                        class="btn btn-warning"
+                        type="object"
+                        groups="fiscalisation.admin_fiscalisation"
+                        invisible="fiscalised or fiscal_state not in ('failed', 'blocked', 'needs_check')"
+                        confirm="Put this document back in the fiscalisation queue? For 'Needs Check' documents, first confirm on FDMS that no receipt exists, otherwise a duplicate may be issued."
                         />
                 </xpath>
 
-                <!-- Add a new page in the notebook for Fiscal Information -->
+                <xpath expr="//sheet" position="before">
+                    <div class="alert alert-info mb-0" role="status"
+                         invisible="fiscal_state not in ('awaiting_payment', 'pending', 'submitting')">
+                        <field name="fiscal_state" widget="badge" readonly="1" nolabel="1"/>
+                        <span invisible="fiscal_state != 'awaiting_payment'"> This invoice will be fiscalised with ZIMRA automatically once a payment is linked to it.</span>
+                        <span invisible="fiscal_state != 'pending'"> Queued for fiscalisation with ZIMRA.</span>
+                        <span invisible="fiscal_state != 'submitting'"> Being submitted to ZIMRA.</span>
+                        <div invisible="not fiscal_issues" class="text-warning mt-1">
+                            <strong>Pre-check issues: </strong><field name="fiscal_issues" readonly="1" nolabel="1"/>
+                        </div>
+                        <div invisible="fiscal_state != 'pending' or not fiscal_last_error" class="text-muted mt-1">
+                            Last attempt: <field name="fiscal_last_error" readonly="1" nolabel="1"/>
+                            (next try <field name="fiscal_next_attempt" readonly="1" nolabel="1"/>)
+                        </div>
+                    </div>
+                    <div class="alert alert-danger mb-0" role="alert"
+                         invisible="fiscal_state not in ('failed', 'blocked', 'needs_check')">
+                        <strong>ZIMRA fiscalisation: <field name="fiscal_state" readonly="1" nolabel="1"/></strong>
+                        <div><field name="fiscal_last_error" readonly="1" nolabel="1"/></div>
+                    </div>
+                </xpath>
+
                 <xpath expr="//notebook" position="inside">
-                    <page string="Fiscal Information" invisible="fiscalised == False or move_type not in ('out_invoice','out_refund')">
+                    <page string="Fiscal Information" name="fiscal_information"
+                          invisible="move_type not in ('out_invoice','out_refund') or fiscal_state == 'not_applicable' and not fiscalised">
                         <group>
-                            <field name="qr_url" readonly="1"/>
-                            <field name="fiscal_date" readonly="True"/>
-                            <field name="device_id" readonly="1"/>
-                            <field name="receipt_global_number" readonly="1"/>
-                            <field name="receipt_number" readonly="1"/>
-                            <field name="fiscal_day_no" readonly="1"/>
-                            <field name="verification_code" readonly="1"/>
-                            <field name="customer_vat" readonly="1"/>
-                            <field name="customer_tin" readonly="1"/>
+                            <group string="Status">
+                                <field name="fiscal_state" widget="badge"
+                                       decoration-success="fiscal_state == 'done'"
+                                       decoration-info="fiscal_state in ('awaiting_payment', 'pending', 'submitting')"
+                                       decoration-danger="fiscal_state in ('failed', 'blocked', 'needs_check')"/>
+                                <field name="fiscal_attempts"/>
+                                <field name="fiscal_next_attempt" invisible="not fiscal_next_attempt"/>
+                                <field name="fiscal_last_error" invisible="not fiscal_last_error"/>
+                                <field name="fiscal_issues" invisible="not fiscal_issues"/>
+                            </group>
+                            <group string="Receipt" invisible="not fiscalised">
+                                <field name="qr_url" readonly="1" widget="url"/>
+                                <field name="fiscal_date" readonly="True"/>
+                                <field name="device_id" readonly="1"/>
+                                <field name="receipt_global_number" readonly="1"/>
+                                <field name="receipt_number" readonly="1"/>
+                                <field name="fiscal_day_no" readonly="1"/>
+                                <field name="verification_code" readonly="1"/>
+                                <field name="customer_vat" readonly="1"/>
+                                <field name="customer_tin" readonly="1"/>
+                            </group>
                             <field name="fiscalised" readonly="1" invisible="1"/>
                         </group>
                     </page>
+                </xpath>
+            </field>
+        </record>
+
+        <record model="ir.ui.view" id="account_move_list_fiscal">
+            <field name="name">account.move.list.fiscal</field>
+            <field name="model">account.move</field>
+            <field name="inherit_id" ref="account.view_invoice_tree"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='status_in_payment']" position="after">
+                    <field name="fiscal_state" string="Fiscal" widget="badge" optional="show"
+                           invisible="fiscal_state == 'not_applicable'"
+                           decoration-success="fiscal_state == 'done'"
+                           decoration-info="fiscal_state in ('awaiting_payment', 'pending', 'submitting')"
+                           decoration-danger="fiscal_state in ('failed', 'blocked', 'needs_check')"/>
+                </xpath>
+            </field>
+        </record>
+
+        <record model="ir.ui.view" id="account_move_search_fiscal">
+            <field name="name">account.move.search.fiscal</field>
+            <field name="model">account.move</field>
+            <field name="inherit_id" ref="account.view_account_invoice_filter"/>
+            <field name="arch" type="xml">
+                <xpath expr="//filter[@name='cancel']" position="after">
+                    <separator/>
+                    <filter name="fiscal_attention" string="Fiscal: Needs Attention"
+                            domain="[('fiscal_state', 'in', ('failed', 'blocked', 'needs_check'))]"/>
+                    <filter name="fiscal_queued" string="Fiscal: Queued"
+                            domain="[('fiscal_state', 'in', ('pending', 'submitting'))]"/>
+                    <filter name="fiscal_awaiting_payment" string="Fiscal: Awaiting Payment"
+                            domain="[('fiscal_state', '=', 'awaiting_payment')]"/>
+                    <filter name="fiscal_done" string="Fiscalised"
+                            domain="[('fiscal_state', '=', 'done')]"/>
+                </xpath>
+                <xpath expr="//search" position="inside">
+                    <filter name="group_fiscal_state" string="Fiscal Status" context="{'group_by': 'fiscal_state'}"/>
                 </xpath>
             </field>
         </record>

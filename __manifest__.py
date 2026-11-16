@@ -10,7 +10,7 @@ This module provides integration with fiscal devices to ensure compliance with Z
 It allows for auto-management of fiscal device tokens and regular device status checks.
     """,
     'category': 'Accounting',
-    'version': '19.0.1.0.0',
+    'version': '19.0.1.1.0',
     'author': 'classic_shumba',
     'website': 'https://classicshumba.co.zw',
     'license': 'OPL-1',
