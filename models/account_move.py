@@ -6,7 +6,7 @@ import base64
 import requests
 from markupsafe import Markup, escape
 
-from odoo import models, fields, api, _, SUPERUSER_ID
+from odoo import models, fields, api, SUPERUSER_ID
 from odoo.exceptions import UserError
 from odoo.modules import module as odoo_module
 
@@ -179,19 +179,19 @@ class AccountMove(models.Model):
         self.ensure_one()
         issues = []
         if not self._fiscal_get_device():
-            issues.append(_("No fiscal device is configured for company %s.", self.company_id.name))
+            issues.append(self.env._("No fiscal device is set up for %s.", self.company_id.name))
         if not self.partner_id:
-            issues.append(_("A customer is required."))
+            issues.append(self.env._("Set a customer on the invoice."))
         product_lines = self.invoice_line_ids.filtered(
             lambda l: l.display_type in (False, 'product') and l.quantity > 0)
         for line in product_lines:
             if not line.product_id:
-                issues.append(_("Line '%s' has no product.", (line.name or '')[:60]))
+                issues.append(self.env._("Line \"%s\" has no product.", (line.name or '')[:60]))
         inclusion = {line.tax_ids[0].price_include for line in product_lines if line.tax_ids}
         if len(inclusion) > 1:
-            issues.append(_("Lines mix tax-inclusive and tax-exclusive prices."))
+            issues.append(self.env._("All lines must use the same tax setting: either tax-included or tax-excluded prices."))
         if self.move_type == 'out_refund' and not self._fiscal_original_invoice().fiscalised:
-            issues.append(_("A credit note can only be fiscalised against a fiscalised original invoice."))
+            issues.append(self.env._("The invoice this credit note reverses has not been fiscalised yet."))
         return "\n".join(issues)
 
     def _fiscal_original_invoice(self):
@@ -267,8 +267,9 @@ class AccountMove(models.Model):
                 if issues:
                     problems.append("%s:\n%s" % (move.display_name, issues))
             if problems:
-                raise UserError(_("This invoice cannot be fiscalised as it stands. Fix the following before confirming:\n\n%s")
-                                % "\n\n".join(problems))
+                raise UserError(self.env._(
+                    "Fix the following before confirming, otherwise the invoice cannot be fiscalised:\n\n%s",
+                    "\n\n".join(problems)))
         return super().action_post()
 
     def _fiscal_queue_on_post(self):
@@ -307,9 +308,9 @@ class AccountMove(models.Model):
     def _fiscal_check_not_locked(self):
         locked = self.filtered(lambda m: m.fiscalised or m.fiscal_state in FISCAL_LOCKED_STATES)
         if locked:
-            raise UserError(_(
-                "%s has been (or may have been) fiscalised with ZIMRA and cannot be reset or cancelled. "
-                "Correct it with a credit or debit note instead.", ", ".join(locked.mapped('name'))))
+            raise UserError(self.env._(
+                "%s is fiscalised with ZIMRA, or its submission is in progress, so it cannot be reset to draft or cancelled. "
+                "Issue a credit or debit note to correct it.", ", ".join(locked.mapped('name'))))
 
     def button_draft(self):
         self._fiscal_check_not_locked()
@@ -335,33 +336,33 @@ class AccountMove(models.Model):
         """Queue the document for immediate fiscalisation (manual path)."""
         for move in self:
             if move.fiscalised or move.fiscal_state in FISCAL_LOCKED_STATES:
-                raise UserError(_("%s is already fiscalised or being fiscalised.", move.name))
+                raise UserError(self.env._("%s is already fiscalised, or its submission is in progress.", move.name))
             if move.state != 'posted' or move.move_type not in ('out_invoice', 'out_refund'):
-                raise UserError(_("Only confirmed customer invoices and credit notes can be fiscalised."))
+                raise UserError(self.env._("Only confirmed customer invoices and credit notes can be fiscalised."))
             if not move._fiscal_get_device():
-                raise UserError(_("No fiscal device configured for this company"))
+                raise UserError(self.env._("No fiscal device is set up for %s.", move.company_id.name))
         self.write({
             'fiscal_state': 'pending', 'fiscal_attempts': 0,
             'fiscal_next_attempt': False, 'fiscal_last_error': False,
         })
         self._fiscal_trigger_cron()
-        return self._fiscal_notify(_("Queued for fiscalisation"),
-                                   _("The document will be submitted to ZIMRA within a minute. Refresh to see the result."))
+        return self._fiscal_notify(self.env._("Queued for fiscalisation"),
+                                   self.env._("It will be sent to ZIMRA in the next few minutes."))
 
     def action_fiscal_retry(self):
         """Admin: put failed / blocked / needs-check documents back in the queue."""
         if not self.env.user.has_group('fiscalisation.admin_fiscalisation'):
-            raise UserError(_("Only Fiscalisation Administrators can retry fiscalisation."))
+            raise UserError(self.env._("Only fiscalisation administrators can retry fiscalisation."))
         moves = self.filtered(lambda m: m.fiscal_state in FISCAL_ATTENTION_STATES and not m.fiscalised)
         for move in moves:
-            move._fiscal_log(_("Fiscalisation retry requested by %s", self.env.user.name))
+            move._fiscal_log(self.env._("Fiscalisation retry requested by %s", self.env.user.name))
         moves.write({
             'fiscal_state': 'pending', 'fiscal_attempts': 0,
             'fiscal_next_attempt': False, 'fiscal_submitted_at': False,
         })
         moves.activity_ids.filtered(lambda a: (a.summary or '').startswith('Fiscalisation')).action_done()
         self._fiscal_trigger_cron()
-        return self._fiscal_notify(_("Queued for fiscalisation"), _("%s document(s) queued.", len(moves)))
+        return self._fiscal_notify(self.env._("Queued for fiscalisation"), self.env._("%s document(s) queued.", len(moves)))
 
     def _fiscal_notify(self, title, message, kind='info'):
         return {
@@ -412,11 +413,11 @@ class AccountMove(models.Model):
         limit = fields.Datetime.now() - timedelta(minutes=FISCAL_STUCK_MINUTES)
         stuck = self.search([('fiscal_state', '=', 'submitting'), ('fiscal_submitted_at', '<', limit)])
         for move in stuck:
-            reason = _("Submission did not finish. FDMS may already hold this document - "
-                       "verify on FDMS before retrying, otherwise a duplicate receipt may be issued.")
+            reason = self.env._("The submission to ZIMRA did not finish, so FDMS may already hold this document. "
+                                "Check FDMS before retrying, or a duplicate receipt may be issued.")
             move.write({'fiscal_state': 'needs_check', 'fiscal_last_error': reason})
-            move._fiscal_log(_("Fiscalisation needs checking"), reason)
-            move._fiscal_alert(_("Fiscalisation needs checking"), reason)
+            move._fiscal_log(self.env._("Fiscalisation needs checking"), reason)
+            move._fiscal_alert(self.env._("Fiscalisation needs checking"), reason)
         if stuck:
             self._fiscal_commit()
 
@@ -437,14 +438,14 @@ class AccountMove(models.Model):
         self.ensure_one()
         device = self._fiscal_get_device()
         if not device:
-            return self._fiscal_set_blocked(_("No fiscal device configured for this company."))
+            return self._fiscal_set_blocked(self.env._("No fiscal device is set up for %s.", self.company_id.name))
         if self.receipt_global_number:
             # Defensive: receipt data already stored, never submit twice.
             return self.write({'fiscal_state': 'done', 'fiscalised': True})
         if not device.is_day_open:
             # Fiscal day closed (e.g. during the night close/open window): wait without burning an attempt.
             return self.write({'fiscal_next_attempt': fields.Datetime.now() + timedelta(minutes=5),
-                               'fiscal_last_error': _("Fiscal day is closed; waiting for it to open.")})
+                               'fiscal_last_error': self.env._("The fiscal day is closed. The document will be sent once it reopens.")})
 
         issues = self._fiscal_preflight()
         if issues:
@@ -476,15 +477,16 @@ class AccountMove(models.Model):
         try:
             self._process_fiscal_response(response)
         except Exception as e:
-            reason = _("FDMS accepted the document but the response could not be stored (%s). "
-                       "Raw response:\n%s") % (e, json.dumps(response, default=str)[:2000])
+            reason = self.env._("FDMS accepted the document, but Odoo could not save the response (%(error)s). "
+                                "Record the receipt from FDMS manually. Response:\n%(response)s",
+                                error=e, response=json.dumps(response, default=str)[:2000])
             self.write({'fiscal_state': 'needs_check', 'fiscal_last_error': reason})
-            self._fiscal_log(_("Fiscalisation needs checking"), reason)
-            self._fiscal_alert(_("Fiscalisation needs checking"), reason)
+            self._fiscal_log(self.env._("Fiscalisation needs checking"), reason)
+            self._fiscal_alert(self.env._("Fiscalisation needs checking"), reason)
             return
 
         self.write({'fiscal_state': 'done', 'fiscal_next_attempt': False, 'fiscal_last_error': False})
-        self._fiscal_log(_("Fiscalised with ZIMRA"), _(
+        self._fiscal_log(self.env._("Fiscalised with ZIMRA"), self.env._(
             "Receipt %(rn)s (global %(gn)s), fiscal day %(day)s, verification code %(code)s",
             rn=self.receipt_number, gn=self.receipt_global_number,
             day=self.fiscal_day_no, code=self.verification_code))
@@ -496,18 +498,18 @@ class AccountMove(models.Model):
     def _fiscal_set_blocked(self, reason):
         self.write({'fiscal_state': 'blocked', 'fiscal_last_error': reason,
                     'fiscal_issues': reason, 'fiscal_next_attempt': False})
-        self._fiscal_log(_("Fiscalisation blocked"), reason)
-        self._fiscal_alert(_("Fiscalisation blocked"), reason, extra_users=self.invoice_user_id)
+        self._fiscal_log(self.env._("Fiscalisation blocked"), reason)
+        self._fiscal_alert(self.env._("Fiscalisation blocked"), reason, extra_users=self.invoice_user_id)
 
     def _fiscal_handle_error(self, code, status, message):
         self.ensure_one()
         if code == FISCAL_DUPLICATE_CODE:
-            reason = _("FDMS reports this invoice number already exists (%(code)s). "
-                       "Verify the receipt on FDMS and record it; it will not be resubmitted automatically.\n%(msg)s",
-                       code=code, msg=message)
+            reason = self.env._("FDMS already has a receipt for this invoice number (%(code)s). "
+                                "Find the receipt on FDMS and record it. Odoo will not resend this document.\n%(msg)s",
+                                code=code, msg=message)
             self.write({'fiscal_state': 'needs_check', 'fiscal_last_error': reason})
-            self._fiscal_log(_("Fiscalisation needs checking"), reason)
-            self._fiscal_alert(_("Fiscalisation needs checking"), reason)
+            self._fiscal_log(self.env._("Fiscalisation needs checking"), reason)
+            self._fiscal_alert(self.env._("Fiscalisation needs checking"), reason)
             return
         if status and 400 <= status < 500 and status not in (401, 403, 408, 429):
             transient = False  # validation / business errors never fix themselves
@@ -517,8 +519,8 @@ class AccountMove(models.Model):
             return self._fiscal_set_blocked(message)
         if self.fiscal_attempts >= FISCAL_MAX_ATTEMPTS:
             self.write({'fiscal_state': 'failed', 'fiscal_last_error': message, 'fiscal_next_attempt': False})
-            self._fiscal_log(_("Fiscalisation failed after %s attempts", self.fiscal_attempts), message)
-            self._fiscal_alert(_("Fiscalisation failed"), message)
+            self._fiscal_log(self.env._("Fiscalisation failed after %s attempts", self.fiscal_attempts), message)
+            self._fiscal_alert(self.env._("Fiscalisation failed"), message)
             return
         delay = FISCAL_RETRY_DELAYS[min(self.fiscal_attempts - 1, len(FISCAL_RETRY_DELAYS) - 1)]
         self.write({
@@ -551,7 +553,7 @@ class AccountMove(models.Model):
         old = self.sudo().invoice_pdf_report_id
         if old:
             # Keep the superseded copy for audit, detached from the invoice PDF field.
-            old.write({'res_field': False, 'name': _("%s (superseded, not fiscalised)", old.name)})
+            old.write({'res_field': False, 'name': self.env._("%s (superseded, not fiscalised)", old.name)})
         self.invalidate_recordset(['invoice_pdf_report_id', 'invoice_pdf_report_file'])
         was_sent = self.is_move_sent
         send = self.env['account.move.send'].sudo()
@@ -578,11 +580,10 @@ class AccountMove(models.Model):
         for line in lines:
             if not line.tax_ids:
                 continue
-                # raise UserError(_(f"Product {line.product_id.name} has no tax configuration."))
             tax_inclusion_types.add(line.tax_ids[0].price_include)
             
         if len(tax_inclusion_types) > 1:
-            raise UserError(_("Mixed tax inclusion types detected. All invoice lines must consistently have either tax-inclusive or tax-exclusive prices."))
+            raise UserError(self.env._("All lines must use the same tax setting: either tax-included or tax-excluded prices."))
             
         receiptLinesTaxInclusive = tax_inclusion_types.pop() if tax_inclusion_types else True
         
@@ -606,13 +607,13 @@ class AccountMove(models.Model):
         """FDMS requires a reason on credit notes (RCPT034)."""
         if self.move_type == 'out_refund':
             original = self._fiscal_original_invoice()
-            return (self.ref or '').strip() or _("Credit note for %s", original.name or self.name)
+            return (self.ref or '').strip() or self.env._("Credit note for %s", original.name or self.name)
         return self.ref or ""
 
     def _prepare_buyer_data(self):
         partner = self.partner_id
         if not partner:
-            raise UserError(_("Customer information is required for fiscalisation"))
+            raise UserError(self.env._("Set a customer on the invoice before fiscalising it."))
             
         if partner.tin:
             buyer_data = {
@@ -649,7 +650,7 @@ class AccountMove(models.Model):
         for line in inv_lines:
             # Ensure HS Code is present
             if not line.product_id.hs_code:
-                raise UserError(_(f'Product ({line.name}) has no HS Code'))
+                raise UserError(self.env._("Product %s has no HS code. Set it on the product, then retry.", line.product_id.display_name))
             
             # Always add a non-discounted sale line
             sale_line_data = {
@@ -733,7 +734,7 @@ class AccountMove(models.Model):
             
         except KeyError as e:
             _logger.error("Missing expected field in API response: %s", str(e))
-            raise UserError(_("Invalid response from fiscal device")) from e
+            raise UserError(self.env._("The fiscal device response is missing %s.", e)) from e
 
     def _adjust_amount(self, amount, receipt_type):
         """Adjust amount sign based on receipt type"""

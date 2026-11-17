@@ -1,4 +1,4 @@
-from odoo import models, fields, api, _
+from odoo import models, fields, api
 from odoo.exceptions import UserError
 import requests
 from datetime import datetime, timedelta
@@ -106,7 +106,7 @@ class FiscalDevice(models.Model):
             return self.company_id.user_ids.partner_id.ids
 
     def action_manual_token_refresh(self):
-        """Manual token refresh with user feedback"""
+        """Refresh the access token from the form button."""
         self.ensure_one()
         try:
             self._get_new_token()
@@ -114,8 +114,8 @@ class FiscalDevice(models.Model):
                 'type': 'ir.actions.client',
                 'tag': 'display_notification',
                 'params': {
-                    'title': _('Success'),
-                    'message': _('Token refreshed successfully'),
+                    'title': self.env._("Token refreshed"),
+                    'message': self.env._("The device has a new access token."),
                     'type': 'success',
                     'sticky': False,
                 }
@@ -125,8 +125,8 @@ class FiscalDevice(models.Model):
                 'type': 'ir.actions.client',
                 'tag': 'display_notification',
                 'params': {
-                    'title': _('Error'),
-                    'message': _('Failed to refresh token: %s') % e,
+                    'title': self.env._("Token refresh failed"),
+                    'message': str(e),
                     'type': 'danger',
                     'sticky': True,
                 }
@@ -139,7 +139,7 @@ class FiscalDevice(models.Model):
             self._get_new_token()
 
     def _get_new_token(self):
-        """Acquire new JWT token from API with better error handling"""
+        """Request a new access token from the fiscal API."""
         try:
             response = requests.post(
                 f"{self.base_url}/api/v1/devices/token",
@@ -150,7 +150,7 @@ class FiscalDevice(models.Model):
             token_data = response.json()
             
             if not all(k in token_data for k in ('access_token', 'refresh_token', 'expires_in')):
-                raise UserError(_('Invalid API response structure'))
+                raise UserError(self.env._("The token response from %s is missing fields.", self.base_url))
             
             self.write({
                 'access_token': token_data['access_token'],
@@ -158,7 +158,7 @@ class FiscalDevice(models.Model):
                 'token_expiry': fields.Datetime.to_string(datetime.now() + timedelta(seconds=token_data['expires_in']))
             })
         except requests.exceptions.ConnectionError as e:
-            error_msg = _("Cannot connect to fiscal device server: %s. Connection refused.") % self.base_url
+            error_msg = self.env._("Cannot connect to the fiscal API at %s.", self.base_url)
             self.write({
                 'last_error_code': 'CONNECTION_REFUSED',
                 'last_error_message': error_msg,
@@ -167,7 +167,7 @@ class FiscalDevice(models.Model):
             })
             raise UserError(error_msg) from e
         except requests.exceptions.Timeout as e:
-            error_msg = _("Connection timed out after %s seconds when requesting token.") % TIMEOUT
+            error_msg = self.env._("The fiscal API did not answer the token request within %s seconds.", TIMEOUT)
             self.write({
                 'last_error_code': 'TIMEOUT',
                 'last_error_message': error_msg,
@@ -180,7 +180,7 @@ class FiscalDevice(models.Model):
             self._log_error_details(error_data)
             raise UserError(self._format_error_message(error_data)) from e
         except Exception as e:
-            error_msg = _("Token refresh failed: %s") % str(e)
+            error_msg = self.env._("Token refresh failed: %s", e)
             self.write({
                 'last_error_code': 'UNKNOWN_ERROR',
                 'last_error_message': error_msg,
@@ -190,9 +190,7 @@ class FiscalDevice(models.Model):
             raise UserError(error_msg) from e
 
     def _api_request(self, endpoint, method='POST', payload=None):
-        """
-        Enhanced API request handler with better connection error handling
-        """
+        """Call the fiscal API and raise a UserError with FDMS details on failure."""
         self.ensure_one()
         
         try:
@@ -202,7 +200,7 @@ class FiscalDevice(models.Model):
             except requests.exceptions.ConnectionError as conn_err:
                 error_data = {
                     'code': 'CONNECTION_REFUSED',
-                    'message': _("Cannot connect to fiscal device server: %s") % self.base_url,
+                    'message': self.env._("Cannot connect to the fiscal API at %s.", self.base_url),
                     'operation_id': '',
                     'status': 0
                 }
@@ -228,7 +226,7 @@ class FiscalDevice(models.Model):
         except requests.exceptions.ConnectionError as e:
             error_data = {
                 'code': 'CONNECTION_REFUSED',
-                'message': _("Connection refused. Please verify the server is running and accessible: %s") % self.base_url,
+                'message': self.env._("Cannot connect to the fiscal API at %s. Check that the server is running.", self.base_url),
                 'operation_id': '',
                 'status': 0
             }
@@ -238,7 +236,7 @@ class FiscalDevice(models.Model):
         except requests.exceptions.Timeout as e:
             error_data = {
                 'code': 'TIMEOUT',
-                'message': _("Connection timed out after %s seconds. Server might be overloaded.") % TIMEOUT,
+                'message': self.env._("The fiscal API did not answer within %s seconds.", TIMEOUT),
                 'operation_id': '',
                 'status': 0
             }
@@ -248,7 +246,7 @@ class FiscalDevice(models.Model):
         except requests.exceptions.RequestException as e:
             error_data = {
                 'code': 'CONNECTION_FAILED',
-                'message': _("Connection error: %s") % str(e),
+                'message': self.env._("Connection to the fiscal API failed: %s", e),
                 'operation_id': '',
                 'status': 0
             }
@@ -259,7 +257,7 @@ class FiscalDevice(models.Model):
         """Parse FDMS error response structure"""
         error_data = {
             'code': 'UNKNOWN',
-            'message': _("Unknown error occurred"),
+            'message': self.env._("Unknown error"),
             'operation_id': '',
             'status': http_error.response.status_code
         }
@@ -289,14 +287,14 @@ class FiscalDevice(models.Model):
         except json.JSONDecodeError:
             error_data.update({
                 'code': 'INVALID_RESPONSE',
-                'message': _("Server returned non-JSON response"),
+                'message': self.env._("The fiscal API returned a response that is not JSON."),
             })
 
         return error_data
 
     def _handle_api_error(self, exception, message=None):
         """Handle API request errors and log them appropriately"""
-        error_msg = message or _("API request failed")
+        error_msg = message or self.env._("API request failed")
         
         if isinstance(exception, requests.HTTPError):
             status_code = exception.response.status_code
@@ -325,16 +323,16 @@ class FiscalDevice(models.Model):
         return str(value)
 
     def _parse_validation_errors(self, response_data):
-        """Process 422 validation errors in a robust way."""
+        """Turn a 422 validation response into readable text."""
         error_map = {
-            'DEVICE_NOT_FOUND': _("Device not registered in FDMS"),
-            'INVALID_OPERATION_STATE': _("Device in invalid state for requested operation"),
-            'MISSING_REQUIRED_FIELD': _("Required configuration missing in device"),
-            'AUTH_TOKEN_EXPIRED': _("Authentication token has expired"),
+            'DEVICE_NOT_FOUND': self.env._("The device is not registered in FDMS."),
+            'INVALID_OPERATION_STATE': self.env._("The device cannot perform this operation in its current state."),
+            'MISSING_REQUIRED_FIELD': self.env._("The device is missing required configuration."),
+            'AUTH_TOKEN_EXPIRED': self.env._("The access token has expired."),
         }
 
         error_code = response_data.get('errorCode', '')
-        title = error_map.get(error_code, _("Validation error occurred"))
+        title = error_map.get(error_code, self.env._("FDMS rejected the request."))
 
         # 'detail' may be string OR list OR dict depending on API
         detail_text = self._to_text(response_data.get('detail', ''))
@@ -348,10 +346,7 @@ class FiscalDevice(models.Model):
         if isinstance(errors, dict):
             for field, field_errors in errors.items():
                 errors_text = self._to_text(field_errors)
-                message_parts.append(_("Field %(field)s: %(errors)s") % {
-                    'field': field,
-                    'errors': errors_text,
-                })
+                message_parts.append(self.env._("Field %(field)s: %(errors)s", field=field, errors=errors_text))
         elif errors is not None:
             message_parts.append(self._to_text(errors))
 
@@ -367,18 +362,13 @@ class FiscalDevice(models.Model):
         })
 
     def _format_error_message(self, error_data):
-        """Generate user-friendly error message"""
-        return _(
-            "FDMS Error [%(code)s]\n"
-            "Status: %(status)d\n"
-            "Operation ID: %(operation_id)s\n"
-            "Message: %(message)s"
-        ) % {
-            'code': error_data['code'],
-            'status': error_data['status'],
-            'operation_id': error_data['operation_id'] or _('None provided'),
-            'message': error_data['message']
-        }
+        """Build the error text shown on documents and in alerts."""
+        message = self.env._(
+            "FDMS error %(code)s (HTTP %(status)s): %(message)s",
+            code=error_data['code'], status=error_data['status'], message=error_data['message'])
+        if error_data['operation_id']:
+            message += "\n" + self.env._("Operation ID: %s", error_data['operation_id'])
+        return message
 
     def _get_auth_headers(self):
         return {
@@ -397,11 +387,11 @@ class FiscalDevice(models.Model):
                 'last_operation': fields.Datetime.now()
             })
             return self._show_notification(
-                _('Day Opened Successfully'),
-                _('New fiscal day number: %s') % response['fiscalDayNo']
+                self.env._("Fiscal day opened"),
+                self.env._("Fiscal day %s is open.", response['fiscalDayNo'])
             )
         except UserError as e:
-            return self._show_notification(_('Day Open Failed'), str(e), is_error=True)
+            return self._show_notification(self.env._("Could not open the fiscal day"), str(e), is_error=True)
     
     def action_close_day(self):
         self.ensure_one()
@@ -418,51 +408,36 @@ class FiscalDevice(models.Model):
             
             # Format success message with response details
             close_time = response.get('fiscalDayClosed', 'N/A')
-            message = _(
-                "Day closed successfully!\n"
-                "• Fiscal Day Number: %(day_no)s\n"
-                "• Closed At: %(close_time)s\n"
-                "• Last Receipt: #%(receipt_no)d"
-            ) % {
-                'day_no': response.get('fiscalDayNo', 'N/A'),
-                'close_time': close_time,
-                'receipt_no': response.get('lastReceiptNo', 0)
-            }
-            
-            return self._show_notification(
-                _('Day Closed Successfully'),  # Title
-                message,  # Detailed message
-                is_error=False
-            )
+            message = self.env._(
+                "Fiscal day %(day_no)s closed at %(close_time)s. Last receipt: %(receipt_no)s.",
+                day_no=response.get('fiscalDayNo', 'N/A'),
+                close_time=close_time,
+                receipt_no=response.get('lastReceiptNo', 0))
+            return self._show_notification(self.env._("Fiscal day closed"), message)
             
         except UserError as e:
-            return self._show_notification(
-                _('Close Day Failed'),  # Title
-                str(e),  # Error message
-                is_error=True
-            )
+            return self._show_notification(self.env._("Could not close the fiscal day"), str(e), is_error=True)
 
     def action_check_status(self):
-        """Manual status check triggered by button"""
+        """Refresh the device status from the form button."""
         self.ensure_one()
         try:
-            # Change method to POST
-            response = self._api_request('/api/v1/status', method='POST')  # Changed to POST
+            response = self._api_request('/api/v1/status', method='POST')
             self._process_status_response(response)
             return self._show_notification(
-                _('Status Check Successful'),
-                _('Device status updated successfully')
+                self.env._("Status updated"),
+                self.env._("Fiscal day status: %s", self.fiscal_day_status or self.env._("unknown"))
             )
         except UserError as e:
             return self._show_notification(
-                _('Status Check Failed'),
+                self.env._("Status check failed"),
                 str(e),
                 is_error=True
             )
             
     @api.model
     def cron_check_device_status(self):
-        """Enhanced cron job with error isolation"""
+        """Check every device's status; one failing device does not stop the rest."""
         devices = self.search([])
         for device in devices:
             try:
@@ -472,8 +447,8 @@ class FiscalDevice(models.Model):
             except Exception as e:
                 _logger.error("Status check failed for %s: %s", device.name, str(e))
                 device.message_post(
-                    body=_("Automatic status check failed: %s") % str(e),
-                    subject=_("Status Check Error"),
+                    body=self.env._("Automatic status check failed: %s", e),
+                    subject=self.env._("Status check failed"),
                     partner_ids=device._get_notification_recipients()
                 )
 
@@ -487,8 +462,8 @@ class FiscalDevice(models.Model):
             except Exception as e:
                 _logger.error("Token refresh failed for %s: %s", device.name, str(e))
                 device.message_post(
-                    body=_("Automatic token refresh failed: %s") % str(e),
-                    subject=_("Token Refresh Error"),
+                    body=self.env._("Automatic token refresh failed: %s", e),
+                    subject=self.env._("Token refresh failed"),
                     partner_ids=device._get_notification_recipients()
                 )
     # Helper methods
@@ -538,8 +513,8 @@ class FiscalDevice(models.Model):
                         'last_operation': fields.Datetime.now()
                     })
                     # device.message_post(
-                    #     body=_("Fiscal day opened automatically. New fiscal day number: %s") % response['fiscalDayNo'],
-                    #     subject=_("Automatic Fiscal Day Open"),
+                    #     body=self.env._("Fiscal day opened automatically. New fiscal day number: %s") % response['fiscalDayNo'],
+                    #     subject=self.env._("Automatic Fiscal Day Open"),
                     #     message_type="notification"
                     # )
                     _logger.info("Successfully opened fiscal day for device %s", device.name)
@@ -549,8 +524,8 @@ class FiscalDevice(models.Model):
                     _logger.error("Failed to automatically open fiscal day for device %s: %s", device.name, error_message)
                     
                     # device.message_post(
-                    #     body=_("Failed to automatically open fiscal day: %s") % error_message,
-                    #     subject=_("Automatic Fiscal Day Open Failed"),
+                    #     body=self.env._("Failed to automatically open fiscal day: %s") % error_message,
+                    #     subject=self.env._("Automatic Fiscal Day Open Failed"),
                     #     message_type="notification",
                     #     subtype_id=self.env.ref('mail.mt_note').id,
                     #     partner_ids=device.company_id.user_ids.mapped('partner_id').ids
@@ -582,24 +557,6 @@ class FiscalDevice(models.Model):
                         'last_operation': fields.Datetime.now()
                     })
                     
-                    # Format notification message
-                    close_time = response.get('fiscalDayClosed', 'N/A')
-                    message = _(
-                        "Fiscal day closed automatically.\n"
-                        "• Fiscal Day Number: %(day_no)s\n"
-                        "• Closed At: %(close_time)s\n"
-                        "• Last Receipt: #%(receipt_no)d"
-                    ) % {
-                        'day_no': response.get('fiscalDayNo', 'N/A'),
-                        'close_time': close_time,
-                        'receipt_no': response.get('lastReceiptNo', 0)
-                    }
-                    
-                    # device.message_post(
-                    #     body=message,
-                    #     subject=_("Automatic Fiscal Day Close"),
-                    #     message_type="notification"
-                    # )
                     
                     _logger.info("Successfully closed fiscal day for device %s", device.name)
                     
@@ -608,8 +565,8 @@ class FiscalDevice(models.Model):
                     _logger.error("Failed to automatically close fiscal day for device %s: %s", device.name, error_message)
                     
                     # device.message_post(
-                    #     body=_("Failed to automatically close fiscal day: %s") % error_message,
-                    #     subject=_("Automatic Fiscal Day Close Failed"),
+                    #     body=self.env._("Failed to automatically close fiscal day: %s") % error_message,
+                    #     subject=self.env._("Automatic Fiscal Day Close Failed"),
                     #     message_type="notification",
                     #     subtype_id=self.env.ref('mail.mt_note').id,
                     #     partner_ids=device.company_id.user_ids.mapped('partner_id').ids
