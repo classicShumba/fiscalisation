@@ -67,7 +67,7 @@
                                 <field name="fiscal_issues" invisible="not fiscal_issues"/>
                             </group>
                             <group string="Receipt" invisible="not fiscalised">
-                                <field name="qr_url" readonly="1" widget="url"/>
+                                <field name="qr_url" readonly="1"/>
                                 <field name="fiscal_date" readonly="True"/>
                                 <field name="device_id" readonly="1"/>
                                 <field name="receipt_global_number" readonly="1"/>
