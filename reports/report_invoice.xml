@@ -71,7 +71,7 @@
                             <!-- Credit Note Details -->
                             <t t-if="o.move_type == 'out_refund'">
                                 <strong>Credit Note No:</strong> <span t-if="o.name != '/'" t-esc="o.name.replace('/', '')"/><br/>
-                                <strong>Reference:</strong> <span t-esc="o.ref.split(',')[0].strip().replace('/', '') if ',' in o.ref else o.ref.strip().replace('/', '')"/><br/>
+                                <strong>Reference:</strong> <span t-esc="(o.ref or '').split(',')[0].strip().replace('/', '')"/><br/>
                                 <strong>Document Source:</strong> <span t-field="o.invoice_origin"/><br/>
                                 <strong>Fiscal Day No:</strong> <span t-field="o.fiscal_day_no"/><br/>
                                 <strong>Credit Note Date:</strong> <span t-field="o.invoice_date"/><br/>
@@ -80,7 +80,7 @@
                             <!-- Debit Note Details -->
                             <t t-if="o.move_type == 'in_refund'">
                                 <strong>Debit Note No:</strong> <span t-if="o.name != '/'" t-esc="o.name.replace('/', '')"/><br/>
-                                <strong>Reference:</strong> <span t-esc="o.ref.split(',')[0].strip().replace('/', '') if ',' in o.ref else o.ref.strip().replace('/', '')"/><br/>
+                                <strong>Reference:</strong> <span t-esc="(o.ref or '').split(',')[0].strip().replace('/', '')"/><br/>
                                 <strong>Document Source:</strong> <span t-field="o.invoice_origin"/><br/>
                                 <strong>Fiscal Day No:</strong> <span t-field="o.fiscal_day_no"/><br/>
                                 <strong>Debit Note Date:</strong> <span t-field="o.invoice_date"/><br/>
@@ -99,6 +99,7 @@
                     <hr style="border: 1px solid #000000; margin-top: 5px; margin-bottom: 20px;"/>
                     
                     <!-- Credit/Debit Note Information Block -->
+                    <t t-set="credited" t-value="o._fiscal_original_invoice() if o.move_type == 'out_refund' else o.reversed_entry_id"/>
                     <div class="row" t-if="o.move_type in ['out_refund', 'in_refund']" style="margin-bottom: 20px;">
                         <div class="col-12">
                             <div style="border: 1px solid #000; padding: 10px; margin-bottom: 20px;">
@@ -113,15 +114,15 @@
                                         <strong>Device Serial No:</strong> <span t-field="o.device_serial"/>
                                     </div>
                                     <div class="col-6">
-                                        <strong>Invoice No:</strong> <span t-field="o.reversed_entry_id.name"/>
+                                        <strong>Invoice No:</strong> <span t-field="credited.name"/>
                                     </div>
                                 </div>
                                 <div class="row">
                                     <div class="col-6">
-                                        <strong>Receipt Date:</strong> <span t-field="o.reversed_entry_id.invoice_date"/>
+                                        <strong>Receipt Date:</strong> <span t-field="credited.invoice_date"/>
                                     </div>
                                     <div class="col-6">
-                                        <strong>Customer Reference No:</strong> <span t-field="o.reversed_entry_id.ref"/>
+                                        <strong>Customer Reference No:</strong> <span t-field="credited.ref"/>
                                     </div>
                                 </div>
                             </div>
@@ -302,7 +303,7 @@
                                 <t t-if="o.move_type == 'out_refund'">
                                     <div style="margin-bottom: 15px; page-break-inside: avoid;">
                                         <strong>Reason for Credit Note:</strong><br/>
-                                        <span t-esc="' '.join(o.ref.split(',')[1:]).strip() if ',' in o.ref else o.ref"/>
+                                        <span t-esc="(' '.join((o.ref or '').split(',')[1:]).strip() if ',' in (o.ref or '') else (o.ref or '')) or o._fiscal_receipt_notes()"/>
                                     </div>
                                 </t>
                                 
@@ -310,7 +311,7 @@
                                 <t t-if="o.move_type == 'in_refund'">
                                     <div style="margin-bottom: 15px; page-break-inside: avoid;">
                                         <strong>Reason for Debit Note:</strong><br/>
-                                        <span t-esc="' '.join(o.ref.split(',')[1:]).strip() if ',' in o.ref else o.ref"/>
+                                        <span t-esc="' '.join((o.ref or '').split(',')[1:]).strip() if ',' in (o.ref or '') else (o.ref or '')"/>
                                     </div>
                                 </t>
                                 

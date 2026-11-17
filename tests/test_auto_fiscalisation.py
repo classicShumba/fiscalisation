@@ -292,3 +292,11 @@ class TestAutoFiscalisation(AccountTestInvoicingCommon):
         self.assertEqual(err['code'], 'RCPT034')
         self.assertIn('receiptNotes is required', err['message'])
 
+
+    def test_credit_note_without_reference_renders(self):
+        inv = self._invoice()
+        refund = self.init_invoice('out_refund', partner=self.partner_a, products=self.product_a, post=True)
+        (inv | refund).line_ids.filtered(lambda l: l.account_id.account_type == 'asset_receivable').reconcile()
+        self.assertFalse(refund.ref)
+        html, _ = self.env['ir.actions.report']._render_qweb_html('account.report_invoice', refund.ids)
+        self.assertIn(inv.name, html.decode())  # credited invoice found via reconciliation
