@@ -206,3 +206,8 @@ class TestAutoFiscalisation(AccountTestInvoicingCommon):
         self.assertTrue(inv.invoice_pdf_report_id)
         self.assertNotEqual(inv.invoice_pdf_report_id, frozen)
         self.assertFalse(frozen.sudo().res_field)  # old copy kept for audit, detached
+
+    def test_day_status_casing_is_normalised(self):
+        self.device._process_status_response({'fiscalDayStatus': 'FiscalDayClosed'})
+        self.assertEqual(self.device.fiscal_day_status, 'FISCALDAYCLOSED')
+        self.assertFalse(self.device.is_day_open)

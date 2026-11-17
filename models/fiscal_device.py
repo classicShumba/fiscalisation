@@ -56,7 +56,7 @@ class FiscalDevice(models.Model):
     def _compute_is_day_open(self):
         """Compute day open status based on fiscal day status"""
         for record in self:
-            record.is_day_open = record.fiscal_day_status != 'FISCALDAYCLOSED'
+            record.is_day_open = (record.fiscal_day_status or '').upper() != 'FISCALDAYCLOSED'
 
     @api.depends('base_url')
     def _compute_fdms_url(self):
@@ -391,7 +391,7 @@ class FiscalDevice(models.Model):
             
             # Process the response data
             self.write({
-                'fiscal_day_status': response.get('fiscalDayStatus'),
+                'fiscal_day_status': (response.get('fiscalDayStatus') or '').upper() or False,
                 'last_receipt_global_no': response.get('lastReceiptGlobalNo'),
                 'fiscal_day_no': response.get('fiscalDayNo'),
                 'last_operation': fields.Datetime.now()
@@ -488,7 +488,7 @@ class FiscalDevice(models.Model):
     def _process_status_response(self, response):
         """Store status response data"""
         self.write({
-            'fiscal_day_status': response.get('fiscalDayStatus'),
+            'fiscal_day_status': (response.get('fiscalDayStatus') or '').upper() or False,
             'last_receipt_global_no': response.get('lastReceiptGlobalNo'),
             'last_receipt_no': response.get('lastReceiptNo'),
             'fiscal_day_counters': response.get('fiscalDayCounters', []),
@@ -508,7 +508,7 @@ class FiscalDevice(models.Model):
         # Only execute between 00:00-00:30 AM
         if current_hour == 0 and current_minute < 30:
             _logger.info("Starting automatic fiscal day opening")
-            devices = self.search([('fiscal_day_status', '=', 'FISCALDAYCLOSED')])
+            devices = self.search([('fiscal_day_status', '=ilike', 'FISCALDAYCLOSED')])
             
             for device in devices:
                 try:
@@ -549,7 +549,7 @@ class FiscalDevice(models.Model):
         # Only execute between 11:30 PM and midnight
         if (current_hour == 23 and current_minute >= 30) or (current_hour == 0 and current_minute == 0):
             _logger.info("Starting automatic fiscal day closing")
-            devices = self.search([('fiscal_day_status', '=', 'FISCALDAYOPENED')])
+            devices = self.search([('fiscal_day_status', '=ilike', 'FISCALDAYOPENED')])
             
             for device in devices:
                 try:
@@ -557,7 +557,7 @@ class FiscalDevice(models.Model):
                     
                     # Process the response data
                     device.write({
-                        'fiscal_day_status': response.get('fiscalDayStatus'),
+                        'fiscal_day_status': (response.get('fiscalDayStatus') or '').upper() or False,
                         'last_receipt_global_no': response.get('lastReceiptGlobalNo'),
                         'fiscal_day_no': response.get('fiscalDayNo'),
                         'last_operation': fields.Datetime.now()
