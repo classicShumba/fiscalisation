@@ -4,6 +4,7 @@ import requests
 from datetime import datetime, timedelta
 import logging
 import json
+import re
 
 TIMEOUT = 15 
 
@@ -275,6 +276,15 @@ class FiscalDevice(models.Model):
 
             if http_error.response.status_code == 422:
                 error_data['message'] = self._parse_validation_errors(response_data)
+
+            # Proxy format: {"error": {"code": "SYS002", "message": "[RCPT034] ...", "details": {...}}}
+            nested = response_data.get('error') if isinstance(response_data, dict) else None
+            if isinstance(nested, dict):
+                message = nested.get('message') or error_data['message']
+                found = re.search(r'\[([A-Z]{3,5}\d{2,4})\]', message or '')
+                error_data['code'] = found.group(1) if found else (nested.get('code') or error_data['code'])
+                details = self._to_text(nested.get('details'))
+                error_data['message'] = message + ("\n" + details if details else "")
 
         except json.JSONDecodeError:
             error_data.update({

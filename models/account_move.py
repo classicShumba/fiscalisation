@@ -509,7 +509,10 @@ class AccountMove(models.Model):
             self._fiscal_log(_("Fiscalisation needs checking"), reason)
             self._fiscal_alert(_("Fiscalisation needs checking"), reason)
             return
-        transient = code in FISCAL_TRANSIENT_CODES or not status or status >= 500 or status in (401, 403, 408, 429)
+        if status and 400 <= status < 500 and status not in (401, 403, 408, 429):
+            transient = False  # validation / business errors never fix themselves
+        else:
+            transient = code in FISCAL_TRANSIENT_CODES or not status or status >= 500 or status in (401, 403, 408, 429)
         if not transient:
             return self._fiscal_set_blocked(message)
         if self.fiscal_attempts >= FISCAL_MAX_ATTEMPTS:
@@ -589,7 +592,7 @@ class AccountMove(models.Model):
                 "receiptCurrency": self.currency_id.name,
                 "invoiceNo": self.name,
                 "buyerData": self._prepare_buyer_data(),
-                "receiptNotes": self.ref if self.ref else "",
+                "receiptNotes": self._fiscal_receipt_notes(),
                 "creditDebitNoteInvoiceNo": (self._fiscal_original_invoice().name or "") if self.move_type == 'out_refund' else "",
                 "receiptLinesTaxInclusive": receiptLinesTaxInclusive,
                 "receiptLines": self._prepare_receipt_lines(),
@@ -598,6 +601,13 @@ class AccountMove(models.Model):
                 "receiptPrintForm": "InvoiceA4"
             }
         }
+
+    def _fiscal_receipt_notes(self):
+        """FDMS requires a reason on credit notes (RCPT034)."""
+        if self.move_type == 'out_refund':
+            original = self._fiscal_original_invoice()
+            return (self.ref or '').strip() or _("Credit note for %s", original.name or self.name)
+        return self.ref or ""
 
     def _prepare_buyer_data(self):
         partner = self.partner_id

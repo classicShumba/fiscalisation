@@ -269,3 +269,26 @@ class TestAutoFiscalisation(AccountTestInvoicingCommon):
         self.assertEqual(inv.fiscal_state, 'blocked')
         alerted = inv.activity_ids.user_id - inv.invoice_user_id
         self.assertEqual(alerted, alert_user)
+
+    def test_unknown_code_with_4xx_blocks(self):
+        inv = self._invoice()
+        self._pay(inv)
+        self._run_queue(side_effect=self._api_error('UNKNOWN', 422))
+        self.assertEqual(inv.fiscal_state, 'blocked')
+
+    def test_credit_note_always_has_notes(self):
+        inv = self._invoice()
+        refund = self.init_invoice('out_refund', partner=self.partner_a, products=self.product_a, post=True)
+        (inv | refund).line_ids.filtered(lambda l: l.account_id.account_type == 'asset_receivable').reconcile()
+        self.assertFalse(refund.ref)
+        self.assertEqual(refund._prepare_fiscal_payload()['receipt']['receiptNotes'], 'Credit note for %s' % inv.name)
+
+    def test_proxy_error_format_is_parsed(self):
+        import requests
+        resp = requests.models.Response()
+        resp.status_code = 422
+        resp._content = b'{"error":{"code":"SYS002","message":"[RCPT034] receiptNotes is required for a CreditNote","details":{}}}'
+        err = self.device._parse_error_response(requests.exceptions.HTTPError(response=resp))
+        self.assertEqual(err['code'], 'RCPT034')
+        self.assertIn('receiptNotes is required', err['message'])
+
