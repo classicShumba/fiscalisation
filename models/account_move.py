@@ -502,10 +502,6 @@ class AccountMove(models.Model):
 
         self.write({'fiscal_state': 'done', 'fiscal_next_attempt': False, 'fiscal_last_error': False,
                     'fiscal_validation': 'pending'})
-        self._fiscal_log(self.env._("Fiscalised with ZIMRA"), self.env._(
-            "Receipt %(rn)s (global %(gn)s), fiscal day %(day)s, verification code %(code)s",
-            rn=self.receipt_number, gn=self.receipt_global_number,
-            day=self.fiscal_day_no, code=self.verification_code))
         self._fiscal_commit()
         self._fiscal_after_done()
         if self.move_type == 'out_invoice':
