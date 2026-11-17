@@ -107,11 +107,41 @@ class TestAutoFiscalisation(AccountTestInvoicingCommon):
         self.assertEqual(payload['creditDebitNoteInvoiceNo'], inv.name)
         self.assertEqual(refund.fiscal_state, 'done')
 
-    def test_credit_note_on_unfiscalised_invoice_is_blocked(self):
+    def test_reversal_fiscalises_invoice_then_credit_note(self):
         inv = self._invoice()
         refund = inv._reverse_moves([{'ref': 'refund'}])
         refund.action_post()
-        self.assertEqual(refund.fiscal_state, 'blocked')
+        self.assertEqual(refund.fiscal_state, 'awaiting_original')
+        self.assertEqual(inv.payment_state, 'reversed')  # settled by the credit note
+        self._run_queue(return_value=ok_response(1))
+        self.assertEqual(inv.fiscal_state, 'done')
+        self.assertEqual(refund.fiscal_state, 'pending')  # released once the invoice is fiscalised
+        api = self._run_queue(return_value=ok_response(2))
+        self.assertEqual(refund.fiscal_state, 'done')
+        self.assertEqual(api.call_args.kwargs['payload']['receipt']['creditDebitNoteInvoiceNo'], inv.name)
+
+    def test_unlinked_credit_note_waits(self):
+        refund = self.init_invoice('out_refund', partner=self.partner_a, products=self.product_a, post=True)
+        self.assertEqual(refund.fiscal_state, 'awaiting_original')
+        api = self._run_queue(return_value=ok_response())
+        api.assert_not_called()
+
+    def test_invoice_settled_by_standalone_credit_note(self):
+        inv = self._invoice()
+        refund = self.init_invoice('out_refund', partner=self.partner_a, products=self.product_a, post=True)
+        self.assertEqual(refund.fiscal_state, 'awaiting_original')
+        (inv | refund).line_ids.filtered(lambda l: l.account_id.account_type == 'asset_receivable').reconcile()
+        self.assertEqual(inv.payment_state, 'reversed')
+        responses = iter([ok_response(1), ok_response(2)])
+        with patch(DEVICE_CLS + '._api_request', autospec=True, side_effect=lambda *a, **k: next(responses)) as api, \
+             patch('odoo.addons.fiscalisation.models.account_move.AccountMove._fiscal_refresh_pdf'):
+            self.Move._cron_fiscalise_queue()   # invoice, which releases the credit note
+            self.Move._cron_fiscalise_queue()   # credit note
+        self.assertEqual(inv.fiscal_state, 'done')
+        self.assertEqual(refund.fiscal_state, 'done', refund.fiscal_last_error)
+        payload = api.call_args_list[1].kwargs['payload']['receipt']
+        self.assertEqual(payload['receiptType'], 'CreditNote')
+        self.assertEqual(payload['creditDebitNoteInvoiceNo'], inv.name)
 
     def test_transient_error_backs_off_then_fails(self):
         inv = self._invoice()
@@ -143,15 +173,21 @@ class TestAutoFiscalisation(AccountTestInvoicingCommon):
     def test_missing_hs_code_blocks_without_calling_fdms(self):
         self.product_a.hs_code = False
         inv = self._invoice()
-        self.assertTrue(inv.fiscal_issues)
+        self.assertFalse(inv.fiscal_issues)  # no HS pre-check on confirm
         self._pay(inv)
         api = self._run_queue(return_value=ok_response())
         api.assert_not_called()
         self.assertEqual(inv.fiscal_state, 'blocked')
 
-    def test_strict_confirm_blocks_on_issues(self):
+    def test_strict_confirm_allows_missing_hs_code(self):
         self.product_a.hs_code = False
         inv = self._invoice(post=False)
+        inv.with_context(fiscal_preflight_strict=True).action_post()
+        self.assertEqual(inv.state, 'posted')
+
+    def test_strict_confirm_blocks_line_without_product(self):
+        inv = self._invoice(post=False)
+        inv.write({'invoice_line_ids': [(0, 0, {'name': 'free text', 'quantity': 1, 'price_unit': 5})]})
         with self.assertRaises(UserError):
             inv.with_context(fiscal_preflight_strict=True).action_post()
 

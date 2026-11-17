@@ -32,9 +32,10 @@
 
                 <xpath expr="//sheet" position="before">
                     <div class="alert alert-info mb-0" role="status"
-                         invisible="fiscal_state not in ('awaiting_payment', 'pending', 'submitting')">
+                         invisible="fiscal_state not in ('awaiting_payment', 'awaiting_original', 'pending', 'submitting')">
                         <field name="fiscal_state" widget="badge" readonly="1" nolabel="1"/>
                         <span invisible="fiscal_state != 'awaiting_payment'"> This invoice will be fiscalised with ZIMRA automatically once a payment is linked to it.</span>
+                        <span invisible="fiscal_state != 'awaiting_original'"> This credit note will be fiscalised once the invoice it credits has been fiscalised.</span>
                         <span invisible="fiscal_state != 'pending'"> Queued for fiscalisation with ZIMRA.</span>
                         <span invisible="fiscal_state != 'submitting'"> Being submitted to ZIMRA.</span>
                         <div invisible="not fiscal_issues" class="text-warning mt-1">
@@ -59,7 +60,7 @@
                             <group string="Status">
                                 <field name="fiscal_state" widget="badge"
                                        decoration-success="fiscal_state == 'done'"
-                                       decoration-info="fiscal_state in ('awaiting_payment', 'pending', 'submitting')"
+                                       decoration-info="fiscal_state in ('awaiting_payment', 'awaiting_original', 'pending', 'submitting')"
                                        decoration-danger="fiscal_state in ('failed', 'blocked', 'needs_check')"/>
                                 <field name="fiscal_attempts"/>
                                 <field name="fiscal_next_attempt" invisible="not fiscal_next_attempt"/>
@@ -93,7 +94,7 @@
                     <field name="fiscal_state" string="Fiscal" widget="badge" optional="show"
                            invisible="fiscal_state == 'not_applicable'"
                            decoration-success="fiscal_state == 'done'"
-                           decoration-info="fiscal_state in ('awaiting_payment', 'pending', 'submitting')"
+                           decoration-info="fiscal_state in ('awaiting_payment', 'awaiting_original', 'pending', 'submitting')"
                            decoration-danger="fiscal_state in ('failed', 'blocked', 'needs_check')"/>
                 </xpath>
             </field>
@@ -111,7 +112,7 @@
                     <filter name="fiscal_queued" string="Fiscal: Queued"
                             domain="[('fiscal_state', 'in', ('pending', 'submitting'))]"/>
                     <filter name="fiscal_awaiting_payment" string="Fiscal: Awaiting Payment"
-                            domain="[('fiscal_state', '=', 'awaiting_payment')]"/>
+                            domain="[('fiscal_state', 'in', ('awaiting_payment', 'awaiting_original'))]"/>
                     <filter name="fiscal_done" string="Fiscalised"
                             domain="[('fiscal_state', '=', 'done')]"/>
                 </xpath>

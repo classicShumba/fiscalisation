@@ -15,6 +15,7 @@ _logger = logging.getLogger(__name__)
 FISCAL_STATES = [
     ('not_applicable', 'Not Applicable'),
     ('awaiting_payment', 'Awaiting Payment'),
+    ('awaiting_original', 'Awaiting Original Invoice'),
     ('pending', 'Queued'),
     ('submitting', 'Submitting'),
     ('done', 'Fiscalised'),
@@ -23,7 +24,8 @@ FISCAL_STATES = [
     ('needs_check', 'Needs Check'),
 ]
 # Payment states that make a customer invoice eligible for fiscalisation.
-FISCAL_PAID_STATES = ('partial', 'in_payment', 'paid')
+# 'reversed' covers invoices settled by applying a credit note.
+FISCAL_PAID_STATES = ('partial', 'in_payment', 'paid', 'reversed')
 # States in which the document is (or may already be) registered with FDMS.
 FISCAL_LOCKED_STATES = ('submitting', 'done', 'needs_check')
 # States needing human attention.
@@ -65,6 +67,7 @@ class AccountMove(models.Model):
         readonly=True, copy=False, index=True, tracking=True,
         help="Not Applicable: not a customer invoice/credit note, or issued before automatic fiscalisation.\n"
              "Awaiting Payment: confirmed; fiscalised automatically once a payment is linked.\n"
+             "Awaiting Original Invoice: credit note waiting for the invoice it credits to be fiscalised.\n"
              "Queued: will be submitted to FDMS by the fiscalisation job.\n"
              "Submitting: submission in progress.\n"
              "Fiscalised: accepted by FDMS.\n"
@@ -184,14 +187,44 @@ class AccountMove(models.Model):
         for line in product_lines:
             if not line.product_id:
                 issues.append(_("Line '%s' has no product.", (line.name or '')[:60]))
-            elif not line.product_id.hs_code:
-                issues.append(_("Product '%s' has no HS Code.", line.product_id.display_name))
         inclusion = {line.tax_ids[0].price_include for line in product_lines if line.tax_ids}
         if len(inclusion) > 1:
             issues.append(_("Lines mix tax-inclusive and tax-exclusive prices."))
-        if self.move_type == 'out_refund' and not self.reversed_entry_id.fiscalised:
+        if self.move_type == 'out_refund' and not self._fiscal_original_invoice().fiscalised:
             issues.append(_("A credit note can only be fiscalised against a fiscalised original invoice."))
         return "\n".join(issues)
+
+    def _fiscal_original_invoice(self):
+        """The customer invoice a credit note credits: the reversed invoice, or else the single
+        invoice it was applied to (credit note used as payment)."""
+        self.ensure_one()
+        if self.move_type != 'out_refund':
+            return self.browse()
+        if self.reversed_entry_id:
+            return self.reversed_entry_id
+        receivable = self.line_ids.filtered(lambda l: l.account_id.account_type == 'asset_receivable')
+        invoices = receivable.matched_debit_ids.debit_move_id.move_id.filtered(
+            lambda m: m.move_type == 'out_invoice' and m.state == 'posted')
+        return invoices if len(invoices) == 1 else self.browse()
+
+    def _fiscal_release_credit_notes(self):
+        """Queue credit notes in self whose original invoice is now fiscalised."""
+        ready = self.filtered(lambda m: m.move_type == 'out_refund' and m.state == 'posted'
+                              and not m.fiscalised
+                              and m.fiscal_state in ('awaiting_original', 'blocked')
+                              and m._fiscal_original_invoice().fiscalised)
+        if ready:
+            ready.write({'fiscal_state': 'pending', 'fiscal_attempts': 0, 'fiscal_next_attempt': False,
+                         'fiscal_last_error': False, 'fiscal_issues': False})
+            self._fiscal_trigger_cron()
+        return ready
+
+    def _fiscal_credit_notes(self):
+        """Credit notes linked to these invoices, by reversal or by reconciliation."""
+        receivable = self.line_ids.filtered(lambda l: l.account_id.account_type == 'asset_receivable')
+        return (self.reversal_move_ids
+                | receivable.matched_credit_ids.credit_move_id.move_id).filtered(
+            lambda m: m.move_type == 'out_refund')
 
     def _fiscal_alert(self, summary, note, extra_users=None):
         """Schedule a to-do for the device's alert recipients, or fiscalisation admins if none are set."""
@@ -252,13 +285,12 @@ class AccountMove(models.Model):
                 move.write(dict(reset, fiscal_state='awaiting_payment', fiscal_issues=move._fiscal_preflight() or False))
                 if move.payment_state in FISCAL_PAID_STATES:
                     trigger = True
-            elif move.reversed_entry_id.fiscalised:
+            elif move._fiscal_original_invoice().fiscalised:
                 move.write(dict(reset, fiscal_state='pending', fiscal_issues=move._fiscal_preflight() or False))
                 trigger = True
             else:
-                reason = _("Credit note does not reverse a fiscalised invoice; it was not sent to FDMS.")
-                move.write(dict(reset, fiscal_state='blocked', fiscal_issues=reason, fiscal_last_error=reason))
-                move._fiscal_alert(_("Fiscalisation blocked"), reason)
+                # Sent once the invoice it credits is fiscalised (reversal or applied as payment).
+                move.write(dict(reset, fiscal_state='awaiting_original', fiscal_issues=False))
         if trigger:
             self._fiscal_trigger_cron()
 
@@ -282,7 +314,7 @@ class AccountMove(models.Model):
     def button_draft(self):
         self._fiscal_check_not_locked()
         res = super().button_draft()
-        self.filtered(lambda m: m.fiscal_state in ('awaiting_payment', 'pending', 'failed', 'blocked')).write({
+        self.filtered(lambda m: m.fiscal_state in ('awaiting_payment', 'awaiting_original', 'pending', 'failed', 'blocked')).write({
             'fiscal_state': 'not_applicable', 'fiscal_next_attempt': False,
         })
         return res
@@ -290,7 +322,7 @@ class AccountMove(models.Model):
     def button_cancel(self):
         self._fiscal_check_not_locked()
         res = super().button_cancel()
-        self.filtered(lambda m: m.fiscal_state in ('awaiting_payment', 'pending', 'failed', 'blocked')).write({
+        self.filtered(lambda m: m.fiscal_state in ('awaiting_payment', 'awaiting_original', 'pending', 'failed', 'blocked')).write({
             'fiscal_state': 'not_applicable', 'fiscal_next_attempt': False,
         })
         return res
@@ -458,6 +490,8 @@ class AccountMove(models.Model):
             day=self.fiscal_day_no, code=self.verification_code))
         self._fiscal_commit()
         self._fiscal_after_done()
+        if self.move_type == 'out_invoice':
+            self._fiscal_credit_notes()._fiscal_release_credit_notes()
 
     def _fiscal_set_blocked(self, reason):
         self.write({'fiscal_state': 'blocked', 'fiscal_last_error': reason,
@@ -556,7 +590,7 @@ class AccountMove(models.Model):
                 "invoiceNo": self.name,
                 "buyerData": self._prepare_buyer_data(),
                 "receiptNotes": self.ref if self.ref else "",
-                "creditDebitNoteInvoiceNo": self.reversed_entry_id.name if self.move_type in ('out_refund', 'in_refund') else "",
+                "creditDebitNoteInvoiceNo": (self._fiscal_original_invoice().name or "") if self.move_type == 'out_refund' else "",
                 "receiptLinesTaxInclusive": receiptLinesTaxInclusive,
                 "receiptLines": self._prepare_receipt_lines(),
                 "receiptPayments": self._prepare_payment_data(),
