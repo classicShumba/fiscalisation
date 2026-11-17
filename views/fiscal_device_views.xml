@@ -74,6 +74,7 @@
                                 </group>
                                 <group string="Notification Settings">
                                     <field name="notification_email" placeholder="dev@classicshumba.co.zw"/>
+                                    <field name="alert_user_ids" widget="many2many_tags"/>
                                 </group>
                             </group>
                         </page>

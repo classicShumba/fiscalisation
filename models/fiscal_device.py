@@ -47,6 +47,15 @@ class FiscalDevice(models.Model):
         readonly=True
     )
 
+    alert_user_ids = fields.Many2many(
+        'res.users', 'fiscal_device_alert_user_rel', 'device_id', 'user_id',
+        string='Notify on Failure',
+        domain=[('share', '=', False)],
+        help="Users who get a to-do when a document fails, is blocked or needs checking. "
+             "Leave empty to notify all Fiscalisation Administrators.",
+        tracking=True,
+    )
+
     _unique_fisc_device = models.Constraint(
         'UNIQUE(company_id, device_id)',
         'Device ID must be unique per company!'

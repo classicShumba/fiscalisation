@@ -194,10 +194,12 @@ class AccountMove(models.Model):
         return "\n".join(issues)
 
     def _fiscal_alert(self, summary, note, extra_users=None):
-        """Schedule a to-do for fiscalisation administrators (once per open summary)."""
+        """Schedule a to-do for the device's alert recipients, or fiscalisation admins if none are set."""
         self.ensure_one()
-        group = self.env.ref('fiscalisation.admin_fiscalisation', raise_if_not_found=False)
-        users = group.sudo().user_ids if group else self.env['res.users']
+        users = self._fiscal_get_device().alert_user_ids
+        if not users:
+            group = self.env.ref('fiscalisation.admin_fiscalisation', raise_if_not_found=False)
+            users = group.sudo().user_ids if group else self.env['res.users']
         if extra_users:
             users |= extra_users
         users = users.filtered(lambda u: u.active and not u.share and u.id != SUPERUSER_ID)

@@ -191,16 +191,25 @@ class TestAutoFiscalisation(AccountTestInvoicingCommon):
         self.assertEqual(bill.fiscal_state, 'not_applicable')
 
     def test_fiscalised_pdf_replaces_frozen_copy(self):
-        inv = self._invoice()
-        Send = self.env['account.move.send'].with_context(force_report_rendering=True)
-        data = {inv: {'pdf_report': Send._get_default_pdf_report_id(inv)}}
-        Send._prepare_invoice_pdf_report(data)
-        Send._link_invoice_documents(data)  # simulate the PDF frozen when first sent
-        frozen = inv.invoice_pdf_report_id
-        self.assertTrue(frozen)
-        self._pay(inv)
-        with patch(DEVICE_CLS + '._api_request', autospec=True, return_value=ok_response()):
-            self.Move.with_context(force_report_rendering=True)._cron_fiscalise_queue()
+        # Rendering is stubbed: wkhtmltopdf can deadlock against the single-threaded test server.
+        def fake_render(send, invoices_data):
+            for invoice, data in invoices_data.items():
+                data['pdf_attachment_values'] = {
+                    'name': invoice._get_invoice_report_filename(), 'raw': b'%PDF-1.4 ' + invoice.name.encode(),
+                    'mimetype': 'application/pdf', 'res_model': invoice._name, 'res_id': invoice.id,
+                    'res_field': 'invoice_pdf_report_file',
+                }
+        Send = self.env['account.move.send']
+        with patch.object(type(Send), '_prepare_invoice_pdf_report', autospec=True, side_effect=fake_render):
+            inv = self._invoice()
+            data = {inv: {'pdf_report': Send._get_default_pdf_report_id(inv)}}
+            Send._prepare_invoice_pdf_report(data)
+            Send._link_invoice_documents(data)  # the PDF frozen when the invoice was first sent
+            frozen = inv.invoice_pdf_report_id
+            self.assertTrue(frozen)
+            self._pay(inv)
+            with patch(DEVICE_CLS + '._api_request', autospec=True, return_value=ok_response()):
+                self.Move._cron_fiscalise_queue()
         inv.invalidate_recordset()
         self.assertEqual(inv.fiscal_state, 'done')
         self.assertTrue(inv.invoice_pdf_report_id)
@@ -211,3 +220,16 @@ class TestAutoFiscalisation(AccountTestInvoicingCommon):
         self.device._process_status_response({'fiscalDayStatus': 'FiscalDayClosed'})
         self.assertEqual(self.device.fiscal_day_status, 'FISCALDAYCLOSED')
         self.assertFalse(self.device.is_day_open)
+
+    def test_alerts_go_to_configured_users(self):
+        alert_user = self.env['res.users'].create({
+            'name': 'Fiscal Alerts', 'login': 'fiscal.alerts@example.com',
+            'group_ids': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.device.alert_user_ids = alert_user
+        inv = self._invoice()
+        self._pay(inv)
+        self._run_queue(side_effect=self._api_error('RCPT020', 422))
+        self.assertEqual(inv.fiscal_state, 'blocked')
+        alerted = inv.activity_ids.user_id - inv.invoice_user_id
+        self.assertEqual(alerted, alert_user)
