@@ -300,3 +300,68 @@ class TestAutoFiscalisation(AccountTestInvoicingCommon):
         self.assertFalse(refund.ref)
         html, _ = self.env['ir.actions.report']._render_qweb_html('account.report_invoice', refund.ids)
         self.assertIn(inv.name, html.decode())  # credited invoice found via reconciliation
+
+    def _http_error(self, status, body):
+        import requests
+        resp = requests.models.Response()
+        resp.status_code = status
+        resp._content = body
+        return requests.exceptions.HTTPError(response=resp)
+
+    def test_middleware_validation_format_is_parsed(self):
+        err = self.device._parse_error_response(self._http_error(
+            400, b'{"detail": {"type": "ReceiptValidationError", "title": "Receipt already exists", "status": 400,'
+                 b' "errorCode": "RCPT013", "detail": "Invoice number is not unique"}}'))
+        self.assertEqual(err['code'], 'RCPT013')
+        self.assertEqual(err['message'], 'Invoice number is not unique')
+
+    def test_request_validation_list_is_parsed(self):
+        err = self.device._parse_error_response(self._http_error(
+            422, b'{"detail": [{"loc": ["body", "receipt", "receiptTotal"], "msg": "field required"}]}'))
+        self.assertEqual(err['message'], 'body.receipt.receiptTotal: field required')
+
+    def _fiscalised_invoice(self):
+        inv = self._invoice()
+        self._pay(inv)
+        self._run_queue(return_value=ok_response(1))
+        self.assertEqual(inv.fiscal_validation, 'pending')
+        inv.fiscal_date = fields.Datetime.now()  # keep it inside the check window whatever the run date
+        return inv
+
+    def _check_validation(self, receipts):
+        with patch(DEVICE_CLS + '._api_request', autospec=True, return_value=receipts) as api:
+            self.Move._cron_fiscal_check_validation()
+        return api
+
+    def test_invalid_receipt_is_flagged_and_alerted(self):
+        inv = self._fiscalised_invoice()
+        api = self._check_validation([{
+            'receiptGlobalNo': 1001, 'validationStatus': 'Invalid',
+            'validationErrors': ['{"validationErrorCode": "RCPT022", "validationErrorColor": "Red", '
+                                 '"validationErrorDescription": "Invoice sales line price must be greater than 0"}'],
+        }])
+        self.assertIn('fiscal_day_no=7', api.call_args.args[1])
+        self.assertEqual(inv.fiscal_validation, 'invalid')
+        self.assertEqual(inv.fiscal_validation_errors,
+                         'RCPT022 (Red): Invoice sales line price must be greater than 0')
+        self.assertEqual(inv.fiscal_state, 'done')
+        self.assertTrue(inv.activity_ids.filtered(lambda a: a.summary == 'ZIMRA rejected the receipt'))
+
+    def test_warning_receipt_is_recorded_without_alert(self):
+        inv = self._fiscalised_invoice()
+        self._check_validation([{
+            'receiptGlobalNo': '1001', 'validationStatus': 'Warning',
+            'validationErrors': [{'validationErrorCode': 'RCPT041', 'validationErrorColor': 'Yellow'}],
+        }])
+        self.assertEqual(inv.fiscal_validation, 'warning')
+        self.assertEqual(inv.fiscal_validation_errors, 'RCPT041 (Yellow)')
+        self.assertFalse(inv.activity_ids.filtered(lambda a: a.summary == 'ZIMRA rejected the receipt'))
+
+    def test_unchecked_receipt_stays_pending(self):
+        inv = self._fiscalised_invoice()
+        self._check_validation([{'receiptGlobalNo': 1001, 'validationStatus': None}])
+        self.assertEqual(inv.fiscal_validation, 'pending')
+        self._check_validation([])
+        self.assertEqual(inv.fiscal_validation, 'pending')
+        self._check_validation([{'receiptGlobalNo': 1001, 'validationStatus': 'Valid', 'validationErrors': []}])
+        self.assertEqual(inv.fiscal_validation, 'valid')

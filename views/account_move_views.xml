@@ -47,6 +47,12 @@
                         </div>
                     </div>
                     <div class="alert alert-danger mb-0" role="alert"
+                         invisible="fiscal_validation != 'invalid'">
+                        <strong>ZIMRA marked this receipt as invalid.</strong>
+                        FDMS will not close the fiscal day automatically until it is resolved on FDMS.
+                        <div><field name="fiscal_validation_errors" readonly="1" nolabel="1"/></div>
+                    </div>
+                    <div class="alert alert-danger mb-0" role="alert"
                          invisible="fiscal_state not in ('failed', 'blocked', 'needs_check')">
                         <strong>ZIMRA fiscalisation: <field name="fiscal_state" readonly="1" nolabel="1"/></strong>
                         <div><field name="fiscal_last_error" readonly="1" nolabel="1"/></div>
@@ -68,6 +74,12 @@
                                 <field name="fiscal_issues" invisible="not fiscal_issues"/>
                             </group>
                             <group string="Receipt" invisible="not fiscalised">
+                                <field name="fiscal_validation" widget="badge"
+                                       decoration-success="fiscal_validation == 'valid'"
+                                       decoration-warning="fiscal_validation == 'warning'"
+                                       decoration-info="fiscal_validation == 'pending'"
+                                       decoration-danger="fiscal_validation == 'invalid'"/>
+                                <field name="fiscal_validation_errors" invisible="not fiscal_validation_errors"/>
                                 <field name="qr_url" readonly="1"/>
                                 <field name="fiscal_date" readonly="True"/>
                                 <field name="device_id" readonly="1"/>
@@ -96,6 +108,11 @@
                            decoration-success="fiscal_state == 'done'"
                            decoration-info="fiscal_state in ('awaiting_payment', 'awaiting_original', 'pending', 'submitting')"
                            decoration-danger="fiscal_state in ('failed', 'blocked', 'needs_check')"/>
+                    <field name="fiscal_validation" string="ZIMRA Result" widget="badge" optional="hide"
+                           decoration-success="fiscal_validation == 'valid'"
+                           decoration-warning="fiscal_validation == 'warning'"
+                           decoration-info="fiscal_validation == 'pending'"
+                           decoration-danger="fiscal_validation == 'invalid'"/>
                 </xpath>
             </field>
         </record>
@@ -108,7 +125,9 @@
                 <xpath expr="//filter[@name='cancel']" position="after">
                     <separator/>
                     <filter name="fiscal_attention" string="Fiscal: Needs Attention"
-                            domain="[('fiscal_state', 'in', ('failed', 'blocked', 'needs_check'))]"/>
+                            domain="['|', ('fiscal_state', 'in', ('failed', 'blocked', 'needs_check')), ('fiscal_validation', '=', 'invalid')]"/>
+                    <filter name="fiscal_zimra_invalid" string="Fiscal: Invalid at ZIMRA"
+                            domain="[('fiscal_validation', '=', 'invalid')]"/>
                     <filter name="fiscal_queued" string="Fiscal: Queued"
                             domain="[('fiscal_state', 'in', ('pending', 'submitting'))]"/>
                     <filter name="fiscal_awaiting_payment" string="Fiscal: Awaiting Payment"

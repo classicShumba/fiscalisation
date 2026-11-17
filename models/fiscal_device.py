@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import logging
 import json
 import re
+from urllib.parse import urlencode
 
 TIMEOUT = 15 
 
@@ -275,6 +276,19 @@ class FiscalDevice(models.Model):
             if http_error.response.status_code == 422:
                 error_data['message'] = self._parse_validation_errors(response_data)
 
+            # Middleware validation format: {"detail": {"errorCode": "RCPT013", "detail": "...", ...}}
+            detail = response_data.get('detail') if isinstance(response_data, dict) else None
+            if isinstance(detail, dict):
+                error_data['code'] = detail.get('errorCode') or detail.get('type') or error_data['code']
+                error_data['message'] = detail.get('detail') or detail.get('title') or error_data['message']
+                error_data['operation_id'] = detail.get('operationID') or error_data['operation_id']
+            elif isinstance(detail, list):
+                # Request validation format: {"detail": [{"loc": [...], "msg": "..."}]}
+                error_data['message'] = "\n".join(
+                    "%s: %s" % (".".join(str(p) for p in item.get('loc', [])), item.get('msg', ''))
+                    if isinstance(item, dict) else str(item)
+                    for item in detail)
+
             # Proxy format: {"error": {"code": "SYS002", "message": "[RCPT034] ...", "details": {...}}}
             nested = response_data.get('error') if isinstance(response_data, dict) else None
             if isinstance(nested, dict):
@@ -291,6 +305,20 @@ class FiscalDevice(models.Model):
             })
 
         return error_data
+
+    def _fiscal_fetch_receipts(self, fiscal_day_no, page_size=100, max_pages=50):
+        """All receipts the middleware holds for one fiscal day, with ZIMRA's verdict."""
+        self.ensure_one()
+        receipts = []
+        for page in range(max_pages):
+            query = urlencode({'fiscal_day_no': fiscal_day_no, 'limit': page_size, 'offset': page * page_size})
+            batch = self._api_request('/api/v1/receipts?%s' % query, method='GET')
+            if not isinstance(batch, list):
+                break
+            receipts += batch
+            if len(batch) < page_size:
+                break
+        return receipts
 
     def _handle_api_error(self, exception, message=None):
         """Handle API request errors and log them appropriately"""

@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime, timedelta
 import json
 import logging
@@ -23,6 +24,15 @@ FISCAL_STATES = [
     ('blocked', 'Blocked'),
     ('needs_check', 'Needs Check'),
 ]
+# ZIMRA's verdict on a receipt, reported after the middleware has issued it.
+FISCAL_VALIDATION = [
+    ('pending', 'Awaiting ZIMRA'),
+    ('valid', 'Valid'),
+    ('warning', 'Valid with Warnings'),
+    ('invalid', 'Invalid'),
+]
+# How long to keep asking the middleware for a receipt's verdict.
+FISCAL_VALIDATION_DAYS = 7
 # Payment states that make a customer invoice eligible for fiscalisation.
 # 'reversed' covers invoices settled by applying a credit note.
 FISCAL_PAID_STATES = ('partial', 'in_payment', 'paid', 'reversed')
@@ -79,6 +89,11 @@ class AccountMove(models.Model):
     fiscal_submitted_at = fields.Datetime(string='Fiscal Submission Started', readonly=True, copy=False)
     fiscal_last_error = fields.Text(string='Last Fiscal Error', readonly=True, copy=False)
     fiscal_issues = fields.Text(string='Fiscal Pre-check Issues', readonly=True, copy=False)
+    fiscal_validation = fields.Selection(
+        FISCAL_VALIDATION, string='ZIMRA Result', readonly=True, copy=False, index=True, tracking=True,
+        help="ZIMRA's check of the receipt, reported by the fiscalisation middleware after the receipt is issued.\n"
+             "Invalid (red or grey) receipts stop the fiscal day from closing until they are resolved on FDMS.")
+    fiscal_validation_errors = fields.Text(string='ZIMRA Findings', readonly=True, copy=False)
 
     _fiscal_receipt_unique = models.UniqueIndex(
         "(company_id, device_id, receipt_global_number) WHERE receipt_global_number IS NOT NULL AND receipt_global_number <> ''",
@@ -485,7 +500,8 @@ class AccountMove(models.Model):
             self._fiscal_alert(self.env._("Fiscalisation needs checking"), reason)
             return
 
-        self.write({'fiscal_state': 'done', 'fiscal_next_attempt': False, 'fiscal_last_error': False})
+        self.write({'fiscal_state': 'done', 'fiscal_next_attempt': False, 'fiscal_last_error': False,
+                    'fiscal_validation': 'pending'})
         self._fiscal_log(self.env._("Fiscalised with ZIMRA"), self.env._(
             "Receipt %(rn)s (global %(gn)s), fiscal day %(day)s, verification code %(code)s",
             rn=self.receipt_number, gn=self.receipt_global_number,
@@ -528,6 +544,77 @@ class AccountMove(models.Model):
             'fiscal_last_error': message,
             'fiscal_next_attempt': fields.Datetime.now() + timedelta(minutes=delay),
         })
+
+    # -------------------------------------------------------------------------
+    # ZIMRA verdict (reported by the middleware after the receipt is issued)
+    # -------------------------------------------------------------------------
+
+    @api.model
+    def _cron_fiscal_check_validation(self):
+        """Record ZIMRA's verdict on recently fiscalised documents.
+
+        The middleware issues the receipt (number, QR code) straight away and submits it
+        to ZIMRA in the background, so ZIMRA's verdict is only available later.
+        """
+        since = fields.Datetime.now() - timedelta(days=FISCAL_VALIDATION_DAYS)
+        moves = self.search([
+            ('fiscal_validation', '=', 'pending'),
+            ('fiscalised', '=', True),
+            ('fiscal_date', '>=', since),
+        ])
+        batches = defaultdict(lambda: self.browse())
+        for move in moves:
+            device = move._fiscal_get_device()
+            if device and move.fiscal_day_no:
+                batches[(device, move.fiscal_day_no)] |= move
+        for (device, day), batch in batches.items():
+            try:
+                receipts = device._fiscal_fetch_receipts(day)
+            except Exception as e:  # middleware down: try again on the next run
+                _logger.warning("Could not fetch ZIMRA results for fiscal day %s: %s", day, e)
+                continue
+            by_global_no = {str(r.get('receiptGlobalNo')): r for r in receipts if isinstance(r, dict)}
+            for move in batch:
+                receipt = by_global_no.get(str(move.receipt_global_number))
+                if receipt:
+                    move._fiscal_apply_validation(receipt)
+            self._fiscal_commit()
+
+    def _fiscal_apply_validation(self, receipt):
+        self.ensure_one()
+        result = (receipt.get('validationStatus') or '').strip().lower()
+        if result not in ('valid', 'warning', 'invalid'):
+            return  # not yet checked by ZIMRA
+        findings = self._fiscal_format_validation_errors(receipt.get('validationErrors'))
+        self.write({'fiscal_validation': result, 'fiscal_validation_errors': findings or False})
+        if result == 'invalid':
+            reason = self.env._(
+                "ZIMRA marked receipt %(receipt)s as invalid:\n%(findings)s\n"
+                "FDMS will not close fiscal day %(day)s automatically until this is resolved on FDMS.",
+                receipt=self.receipt_global_number, findings=findings, day=self.fiscal_day_no)
+            self._fiscal_log(self.env._("ZIMRA rejected the receipt"), reason)
+            self._fiscal_alert(self.env._("ZIMRA rejected the receipt"), reason)
+        elif result == 'warning':
+            self._fiscal_log(self.env._("ZIMRA accepted the receipt with warnings"), findings)
+
+    @api.model
+    def _fiscal_format_validation_errors(self, errors):
+        """Turn FDMS validationErrors (dicts or JSON strings) into one line per finding."""
+        lines = []
+        for entry in errors or []:
+            if isinstance(entry, str):
+                try:
+                    entry = json.loads(entry)
+                except ValueError:
+                    lines.append(entry)
+                    continue
+            if not isinstance(entry, dict):
+                continue
+            line = "%s (%s)" % (entry.get('validationErrorCode') or '?', entry.get('validationErrorColor') or '?')
+            if entry.get('validationErrorDescription'):
+                line += ": %s" % entry['validationErrorDescription']
+            lines.append(line)
+        return "\n".join(lines)
 
     # -------------------------------------------------------------------------
     # Post-fiscalisation: fiscalised PDF
