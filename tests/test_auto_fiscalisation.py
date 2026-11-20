@@ -1,6 +1,8 @@
 from datetime import timedelta
 from unittest.mock import patch
 
+from psycopg2.extensions import TransactionRollbackError
+
 from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests import tagged
@@ -197,6 +199,82 @@ class TestAutoFiscalisation(AccountTestInvoicingCommon):
                    'fiscal_submitted_at': fields.Datetime.now() - timedelta(hours=1)})
         self._run_queue(return_value=ok_response())
         self.assertEqual(inv.fiscal_state, 'needs_check')
+
+    def test_stuck_submission_recovers_issued_receipt(self):
+        inv = self._invoice()
+        self._pay(inv)
+        self.device.fiscal_day_no = '298'
+        inv.write({'fiscal_state': 'submitting',
+                   'fiscal_submitted_at': fields.Datetime.now() - timedelta(hours=1)})
+        issued = [
+            {'invoiceNumber': 'OTHER/1', 'receiptType': 'FiscalInvoice', 'receiptGlobalNo': 6136},
+            {'invoiceNumber': inv.name, 'receiptType': 'FiscalInvoice', 'receiptGlobalNo': 6137,
+             'receiptCounter': 68, 'receiptDate': '2026-11-19T15:27:44', 'fiscalDayNo': 298,
+             'qrCodeUrl': 'https://fdms.zimra.co.zw/x', 'verificationCode': '1314-ECDC-170C-515B',
+             'validationStatus': 'Valid', 'validationErrors': []},
+        ]
+        api = self._run_queue(return_value=issued)
+        self.assertIn('fiscal_day_no=298', api.call_args_list[0].args[1])
+        self.assertTrue(all(c.kwargs.get('method') == 'GET' for c in api.call_args_list))  # never resubmitted
+        self.assertEqual(inv.fiscal_state, 'done')
+        self.assertTrue(inv.fiscalised)
+        self.assertEqual(inv.receipt_global_number, '6137')
+        self.assertEqual(inv.receipt_number, '68')
+        self.assertEqual(inv.fiscal_day_no, '298')
+        self.assertEqual(inv.device_id, '12345')
+        self.assertEqual(inv.fiscal_validation, 'valid')
+
+    def test_receipt_save_retries_after_concurrent_update(self):
+        inv = self._invoice()
+        self._pay(inv)
+        clashes = []
+
+        def commit(model):
+            if inv.fiscal_state == 'done' and not clashes:
+                clashes.append(1)
+                raise TransactionRollbackError("could not serialize access due to concurrent update")
+
+        with patch('odoo.addons.fiscalisation.models.account_move.AccountMove._fiscal_commit',
+                   autospec=True, side_effect=commit):
+            api = self._run_queue(return_value=ok_response())
+        self.assertEqual(clashes, [1])
+        self.assertEqual(api.call_count, 1)
+        self.assertEqual(inv.fiscal_state, 'done')
+        self.assertEqual(inv.receipt_global_number, '1001')
+
+    def test_form_alerts(self):
+        inv = self._invoice()
+        self.assertEqual(inv.fiscal_state, 'awaiting_payment')
+        self.assertFalse([k for k in (inv.alerts or {}) if k.startswith('fiscal_')])  # no noise on normal invoices
+        inv.write({'fiscal_state': 'needs_check', 'fiscal_last_error': 'long technical details'})
+        self.assertEqual(inv.alerts['fiscal_needs_check']['level'], 'danger')
+        self.assertNotIn('long technical details', inv.alerts['fiscal_needs_check']['message'])
+        inv.write({'fiscal_state': 'blocked', 'fiscal_last_error': 'Line 1 has no HS code.'})
+        self.assertIn('Line 1 has no HS code.', inv.alerts['fiscal_blocked']['message'])
+        self.assertNotIn('fiscal_needs_check', inv.alerts)
+        inv.write({'fiscal_state': 'done', 'fiscalised': True, 'receipt_global_number': '6137',
+                   'fiscal_validation': 'invalid', 'fiscal_validation_errors': 'RCPT022 (Red)'})
+        self.assertIn('RCPT022 (Red)', inv.alerts['fiscal_zimra_invalid']['message'])
+        self.assertEqual([k for k in (inv.alerts or {}) if k.startswith('fiscal_')], ['fiscal_zimra_invalid'])
+
+    def test_chatter_is_one_line_per_fiscalisation(self):
+        inv = self._invoice()
+        before = inv.message_ids
+        self._pay(inv)
+        self._run_queue(return_value=ok_response())
+        new = inv.message_ids - before
+        fiscal = new.filtered(lambda m: 'iscal' in (m.body or '') or m.tracking_value_ids.filtered(
+            lambda t: t.field_id.name in ('fiscal_state', 'fiscal_validation')))
+        self.assertEqual([str(m.body) for m in fiscal], ['<p>Fiscalised: receipt 1001.</p>'])
+
+    def test_validation_check_is_scheduled_after_fiscalisation(self):
+        cron = self.env.ref('fiscalisation.ir_cron_fiscal_check_validation')
+        before = self.env['ir.cron.trigger'].search_count([('cron_id', '=', cron.id)])
+        inv = self._invoice()
+        self._pay(inv)
+        self._run_queue(return_value=ok_response())
+        self.assertEqual(inv.fiscal_state, 'done')
+        self.assertGreater(self.env['ir.cron.trigger'].search_count([('cron_id', '=', cron.id)]), before)
 
     def test_closed_day_waits_without_attempt(self):
         self.device.fiscal_day_status = 'FISCALDAYCLOSED'

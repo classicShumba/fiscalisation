@@ -5,11 +5,13 @@ import logging
 import base64
 
 import requests
+from psycopg2.extensions import TransactionRollbackError
 from markupsafe import Markup, escape
 
 from odoo import models, fields, api, SUPERUSER_ID
 from odoo.exceptions import UserError
 from odoo.modules import module as odoo_module
+from odoo.tools.misc import format_datetime
 
 _logger = logging.getLogger(__name__)
 
@@ -33,6 +35,8 @@ FISCAL_VALIDATION = [
 ]
 # How long to keep asking the middleware for a receipt's verdict.
 FISCAL_VALIDATION_DAYS = 7
+# ZIMRA usually answers within seconds of the receipt being issued.
+FISCAL_VALIDATION_DELAY_MINUTES = 1
 # Payment states that make a customer invoice eligible for fiscalisation.
 # 'reversed' covers invoices settled by applying a credit note.
 FISCAL_PAID_STATES = ('partial', 'in_payment', 'paid', 'reversed')
@@ -45,6 +49,8 @@ FISCAL_RETRY_DELAYS = (5, 15, 60, 180, 360)
 FISCAL_MAX_ATTEMPTS = 6
 # A document left in 'submitting' longer than this is considered stuck.
 FISCAL_STUCK_MINUTES = 15
+# How often to retry saving an issued receipt when a concurrent edit of the invoice clashes.
+FISCAL_SAVE_TRIES = 3
 # Error codes treated as transient (retry with back-off).
 FISCAL_TRANSIENT_CODES = {
     'CONNECTION_REFUSED', 'TIMEOUT', 'CONNECTION_FAILED',
@@ -74,7 +80,7 @@ class AccountMove(models.Model):
     # Automatic fiscalisation queue
     fiscal_state = fields.Selection(
         FISCAL_STATES, string='Fiscal Status', default='not_applicable',
-        readonly=True, copy=False, index=True, tracking=True,
+        readonly=True, copy=False, index=True,
         help="Not Applicable: not a customer invoice/credit note, or issued before automatic fiscalisation.\n"
              "Awaiting Payment: confirmed; fiscalised automatically once a payment is linked.\n"
              "Awaiting Original Invoice: credit note waiting for the invoice it credits to be fiscalised.\n"
@@ -90,7 +96,7 @@ class AccountMove(models.Model):
     fiscal_last_error = fields.Text(string='Last Fiscal Error', readonly=True, copy=False)
     fiscal_issues = fields.Text(string='Fiscal Pre-check Issues', readonly=True, copy=False)
     fiscal_validation = fields.Selection(
-        FISCAL_VALIDATION, string='ZIMRA Result', readonly=True, copy=False, index=True, tracking=True,
+        FISCAL_VALIDATION, string='ZIMRA Result', readonly=True, copy=False, index=True,
         help="ZIMRA's check of the receipt, reported by the fiscalisation middleware after the receipt is issued.\n"
              "Invalid (red or grey) receipts stop the fiscal day from closing until they are resolved on FDMS.")
     fiscal_validation_errors = fields.Text(string='ZIMRA Findings', readonly=True, copy=False)
@@ -184,10 +190,24 @@ class AccountMove(models.Model):
             self.env.cr.commit()
 
     @api.model
+    def _fiscal_rollback(self):
+        """Roll back the current transaction, except while running tests."""
+        if not odoo_module.current_test:
+            self.env.cr.rollback()
+            self.env.invalidate_all()
+
+    @api.model
     def _fiscal_trigger_cron(self):
         cron = self.env.ref('fiscalisation.ir_cron_fiscalise_queue', raise_if_not_found=False)
         if cron:
             cron.sudo()._trigger()
+
+    @api.model
+    def _fiscal_trigger_validation_check(self):
+        """Ask for ZIMRA's verdict a minute from now instead of waiting for the next half-hourly run."""
+        cron = self.env.ref('fiscalisation.ir_cron_fiscal_check_validation', raise_if_not_found=False)
+        if cron:
+            cron.sudo()._trigger(fields.Datetime.now() + timedelta(minutes=FISCAL_VALIDATION_DELAY_MINUTES))
 
     def _fiscal_preflight(self):
         """Return a newline separated list of problems that would prevent fiscalisation."""
@@ -208,6 +228,72 @@ class AccountMove(models.Model):
         if self.move_type == 'out_refund' and not self._fiscal_original_invoice().fiscalised:
             issues.append(self.env._("The invoice this credit note reverses has not been fiscalised yet."))
         return "\n".join(issues)
+
+    # -------------------------------------------------------------------------
+    # Form alerts (shown with the standard invoice warnings)
+    # -------------------------------------------------------------------------
+
+    @api.depends('fiscal_state', 'fiscal_issues', 'fiscal_last_error', 'fiscal_next_attempt',
+                 'fiscal_validation', 'fiscal_validation_errors')
+    def _compute_alerts(self):
+        return super()._compute_alerts()
+
+    def _get_alerts(self):
+        alerts = super()._get_alerts()
+        if self.fiscalised or self.fiscal_state in ('not_applicable', 'done'):
+            if self.fiscal_validation == 'invalid':
+                alerts['fiscal_zimra_invalid'] = {
+                    'level': 'danger',
+                    'message': self.env._(
+                        "ZIMRA rejected receipt %(receipt)s. Fiscal day %(day)s will not close until it is "
+                        "fixed on FDMS.\n%(findings)s",
+                        receipt=self.receipt_global_number, day=self.fiscal_day_no,
+                        findings=self.fiscal_validation_errors or ''),
+                }
+            return alerts
+
+        state = self.fiscal_state
+        if state == 'needs_check':
+            alerts['fiscal_needs_check'] = {
+                'level': 'danger',
+                'message': self.env._(
+                    "ZIMRA may already have this document. Check FDMS before retrying, "
+                    "or ZIMRA may issue a second receipt."),
+            }
+        elif state == 'failed':
+            alerts['fiscal_failed'] = {
+                'level': 'danger',
+                'message': self.env._(
+                    "Could not reach ZIMRA after %s attempts. Retry once the connection is back.",
+                    self.fiscal_attempts),
+            }
+        elif state == 'blocked':
+            alerts['fiscal_blocked'] = {
+                'level': 'warning',
+                'message': self.env._(
+                    "Fiscalisation blocked. Correct the document, then retry.\n%s",
+                    self.fiscal_last_error or ''),
+            }
+        else:
+            if self.fiscal_issues:
+                alerts['fiscal_issues'] = {
+                    'level': 'warning',
+                    'message': self.env._("Fix before this document can be fiscalised:\n%s", self.fiscal_issues),
+                }
+            if state == 'awaiting_original':
+                alerts['fiscal_awaiting_original'] = {
+                    'level': 'info',
+                    'message': self.env._(
+                        "Will be fiscalised after the invoice it credits."),
+                }
+            elif state == 'pending' and self.fiscal_last_error and self.fiscal_next_attempt:
+                alerts['fiscal_retrying'] = {
+                    'level': 'info',
+                    'message': self.env._(
+                        "Sending to ZIMRA failed. Next try at %s.",
+                        format_datetime(self.env, self.fiscal_next_attempt, dt_format='short')),
+                }
+        return alerts
 
     def _fiscal_original_invoice(self):
         """The customer invoice a credit note credits: the reversed invoice, or else the single
@@ -259,11 +345,14 @@ class AccountMove(models.Model):
             except Exception:  # never let alerting break the queue
                 _logger.exception("Could not schedule fiscal alert for %s", self.name)
 
-    def _fiscal_log(self, title, detail=None):
-        body = Markup("<b>%s</b>") % title
-        if detail:
-            body += Markup("<br/>") + Markup("<br/>").join(escape(l) for l in str(detail).splitlines())
+    def _fiscal_log(self, message):
+        body = Markup("<br/>").join(escape(line) for line in str(message).splitlines())
         self.sudo().message_post(body=body, message_type='comment', subtype_xmlid='mail.mt_note')
+
+    def _fiscal_clear_alerts(self):
+        """Remove open fiscalisation to-dos without posting a "done" message for each."""
+        self.sudo().activity_ids.filtered(
+            lambda a: (a.summary or '').startswith(('Fiscalisation', 'ZIMRA'))).unlink()
 
     # -------------------------------------------------------------------------
     # Queueing
@@ -370,12 +459,12 @@ class AccountMove(models.Model):
             raise UserError(self.env._("Only fiscalisation administrators can retry fiscalisation."))
         moves = self.filtered(lambda m: m.fiscal_state in FISCAL_ATTENTION_STATES and not m.fiscalised)
         for move in moves:
-            move._fiscal_log(self.env._("Fiscalisation retry requested by %s", self.env.user.name))
+            move._fiscal_log(self.env._("Fiscalisation retried by %s.", self.env.user.name))
         moves.write({
             'fiscal_state': 'pending', 'fiscal_attempts': 0,
             'fiscal_next_attempt': False, 'fiscal_submitted_at': False,
         })
-        moves.activity_ids.filtered(lambda a: (a.summary or '').startswith('Fiscalisation')).action_done()
+        moves._fiscal_clear_alerts()
         self._fiscal_trigger_cron()
         return self._fiscal_notify(self.env._("Queued for fiscalisation"), self.env._("%s document(s) queued.", len(moves)))
 
@@ -428,13 +517,40 @@ class AccountMove(models.Model):
         limit = fields.Datetime.now() - timedelta(minutes=FISCAL_STUCK_MINUTES)
         stuck = self.search([('fiscal_state', '=', 'submitting'), ('fiscal_submitted_at', '<', limit)])
         for move in stuck:
-            reason = self.env._("The submission to ZIMRA did not finish, so FDMS may already hold this document. "
-                                "Check FDMS before retrying, or a duplicate receipt may be issued.")
-            move.write({'fiscal_state': 'needs_check', 'fiscal_last_error': reason})
-            move._fiscal_log(self.env._("Fiscalisation needs checking"), reason)
-            move._fiscal_alert(self.env._("Fiscalisation needs checking"), reason)
-        if stuck:
+            receipt = move._fiscal_find_issued_receipt()
+            if receipt and move._fiscal_save_receipt(receipt, recovered=True):
+                move._fiscal_apply_validation(receipt)
+                self._fiscal_commit()
+                move._fiscal_after_done()
+                continue
+            if move.fiscal_state != 'submitting':
+                continue  # _fiscal_save_receipt already flagged it
+            move._fiscal_set_needs_check(self.env._(
+                "Submission to ZIMRA did not finish. Check FDMS for a receipt before retrying."))
             self._fiscal_commit()
+
+    def _fiscal_find_issued_receipt(self):
+        """The receipt the middleware issued for this document in the current fiscal day, if any.
+
+        Returned in the shape of a submission response, so it can be saved the same way.
+        """
+        self.ensure_one()
+        device = self._fiscal_get_device()
+        if not device or not device.fiscal_day_no:
+            return None
+        try:
+            receipts = device._fiscal_fetch_receipts(device.fiscal_day_no)
+        except Exception as e:  # middleware down: fall back to a manual check
+            _logger.warning("Could not look up the receipt for %s: %s", self.name, e)
+            return None
+        for receipt in receipts:
+            if (isinstance(receipt, dict) and receipt.get('invoiceNumber') == self.name
+                    and receipt.get('receiptType') == self.receipt_type and receipt.get('receiptGlobalNo')):
+                return dict(receipt,
+                            receiptNumber=receipt.get('receiptNumber') or receipt.get('receiptCounter'),
+                            receiptFiscalDate=receipt.get('receiptFiscalDate') or receipt.get('receiptDate'),
+                            deviceID=receipt.get('deviceID') or device.device_id)
+        return None
 
     def _fiscal_lock(self):
         """Row-lock the move if still eligible; False if another worker has it."""
@@ -489,40 +605,70 @@ class AccountMove(models.Model):
                 code, status = device.last_error_code or 'UNKNOWN', device.last_error_status or 0
             return self._fiscal_handle_error(code, status, str(e))
 
-        try:
-            self._process_fiscal_response(response)
-        except Exception as e:
-            reason = self.env._("FDMS accepted the document, but Odoo could not save the response (%(error)s). "
-                                "Record the receipt from FDMS manually. Response:\n%(response)s",
-                                error=e, response=json.dumps(response, default=str)[:2000])
-            self.write({'fiscal_state': 'needs_check', 'fiscal_last_error': reason})
-            self._fiscal_log(self.env._("Fiscalisation needs checking"), reason)
-            self._fiscal_alert(self.env._("Fiscalisation needs checking"), reason)
+        if not self._fiscal_save_receipt(response):
             return
-
-        self.write({'fiscal_state': 'done', 'fiscal_next_attempt': False, 'fiscal_last_error': False,
-                    'fiscal_validation': 'pending'})
-        self._fiscal_commit()
         self._fiscal_after_done()
         if self.move_type == 'out_invoice':
             self._fiscal_credit_notes()._fiscal_release_credit_notes()
 
+    def _fiscal_save_receipt(self, response, recovered=False):
+        """Record the receipt FDMS issued and mark the document fiscalised.
+
+        The receipt already exists on FDMS, so it must not be lost: a concurrent edit of the
+        invoice (e.g. its payment being reconciled) is retried in a fresh transaction, and any
+        other failure keeps the response on the document for a manual record.
+        Returns True once saved.
+        """
+        self.ensure_one()
+        error = None
+        for attempt in range(FISCAL_SAVE_TRIES):
+            try:
+                self._process_fiscal_response(response)
+                self.write({'fiscal_state': 'done', 'fiscal_next_attempt': False, 'fiscal_last_error': False,
+                            'fiscal_validation': 'pending'})
+                self._fiscal_commit()
+                self._fiscal_log(self.env._("Fiscalised: receipt %s (recovered from FDMS).", self.receipt_global_number)
+                                 if recovered else self.env._("Fiscalised: receipt %s.", self.receipt_global_number))
+                self._fiscal_clear_alerts()
+                self._fiscal_trigger_validation_check()
+                return True
+            except TransactionRollbackError as e:
+                error = e
+                _logger.warning("Saving the receipt for %s clashed with another update (try %s), retrying",
+                                self.name, attempt + 1)
+                self._fiscal_rollback()
+            except Exception as e:
+                error = e
+                _logger.exception("Could not save the receipt for %s", self.name)
+                self._fiscal_rollback()
+                break
+        self._fiscal_set_needs_check(
+            self.env._("ZIMRA issued receipt %s, but Odoo could not save it. Record it from FDMS.",
+                       response.get('receiptGlobalNo')),
+            details=self.env._("Error: %(error)s\nResponse: %(response)s",
+                               error=error, response=json.dumps(response, default=str)[:2000]))
+        self._fiscal_commit()
+        return False
+
+    def _fiscal_set_needs_check(self, reason, details=None):
+        """Flag a document FDMS may already hold. ``details`` only goes to the Fiscal Information tab."""
+        self.write({'fiscal_state': 'needs_check',
+                    'fiscal_last_error': reason + ("\n" + details if details else "")})
+        self._fiscal_log(self.env._("Fiscalisation needs checking: %s", reason))
+        self._fiscal_alert(self.env._("Fiscalisation needs checking"), reason)
+
     def _fiscal_set_blocked(self, reason):
         self.write({'fiscal_state': 'blocked', 'fiscal_last_error': reason,
                     'fiscal_issues': reason, 'fiscal_next_attempt': False})
-        self._fiscal_log(self.env._("Fiscalisation blocked"), reason)
+        self._fiscal_log(self.env._("Fiscalisation blocked: %s", reason))
         self._fiscal_alert(self.env._("Fiscalisation blocked"), reason, extra_users=self.invoice_user_id)
 
     def _fiscal_handle_error(self, code, status, message):
         self.ensure_one()
         if code == FISCAL_DUPLICATE_CODE:
-            reason = self.env._("FDMS already has a receipt for this invoice number (%(code)s). "
-                                "Find the receipt on FDMS and record it. Odoo will not resend this document.\n%(msg)s",
-                                code=code, msg=message)
-            self.write({'fiscal_state': 'needs_check', 'fiscal_last_error': reason})
-            self._fiscal_log(self.env._("Fiscalisation needs checking"), reason)
-            self._fiscal_alert(self.env._("Fiscalisation needs checking"), reason)
-            return
+            return self._fiscal_set_needs_check(
+                self.env._("ZIMRA already has a receipt for this invoice number. Record it from FDMS."),
+                details=message)
         if status and 400 <= status < 500 and status not in (401, 403, 408, 429):
             transient = False  # validation / business errors never fix themselves
         else:
@@ -531,7 +677,8 @@ class AccountMove(models.Model):
             return self._fiscal_set_blocked(message)
         if self.fiscal_attempts >= FISCAL_MAX_ATTEMPTS:
             self.write({'fiscal_state': 'failed', 'fiscal_last_error': message, 'fiscal_next_attempt': False})
-            self._fiscal_log(self.env._("Fiscalisation failed after %s attempts", self.fiscal_attempts), message)
+            self._fiscal_log(self.env._("Fiscalisation failed after %(attempts)s attempts: %(error)s",
+                                        attempts=self.fiscal_attempts, error=message))
             self._fiscal_alert(self.env._("Fiscalisation failed"), message)
             return
         delay = FISCAL_RETRY_DELAYS[min(self.fiscal_attempts - 1, len(FISCAL_RETRY_DELAYS) - 1)]
@@ -585,13 +732,13 @@ class AccountMove(models.Model):
         self.write({'fiscal_validation': result, 'fiscal_validation_errors': findings or False})
         if result == 'invalid':
             reason = self.env._(
-                "ZIMRA marked receipt %(receipt)s as invalid:\n%(findings)s\n"
-                "FDMS will not close fiscal day %(day)s automatically until this is resolved on FDMS.",
-                receipt=self.receipt_global_number, findings=findings, day=self.fiscal_day_no)
-            self._fiscal_log(self.env._("ZIMRA rejected the receipt"), reason)
+                "ZIMRA rejected receipt %(receipt)s. Fix it on FDMS, or fiscal day %(day)s will not close.\n%(findings)s",
+                receipt=self.receipt_global_number, day=self.fiscal_day_no, findings=findings)
+            self._fiscal_log(reason)
             self._fiscal_alert(self.env._("ZIMRA rejected the receipt"), reason)
         elif result == 'warning':
-            self._fiscal_log(self.env._("ZIMRA accepted the receipt with warnings"), findings)
+            self._fiscal_log(self.env._("ZIMRA warnings on receipt %(receipt)s:\n%(findings)s",
+                                        receipt=self.receipt_global_number, findings=findings))
 
     @api.model
     def _fiscal_format_validation_errors(self, errors):

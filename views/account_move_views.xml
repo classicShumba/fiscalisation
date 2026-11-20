@@ -14,9 +14,8 @@
                 <xpath expr="//header" position="inside">
                     <button name="action_fiscalise_invoice"
                         string="Fiscalise Now"
-                        class="btn btn-info mr-3"
+                        class="btn btn-secondary"
                         type="object"
-                        style="background:rgba(46, 210, 162,0.2);"
                         invisible="fiscalised or state != 'posted' or device_id == False or move_type not in ('out_invoice','out_refund') or fiscal_state not in ('not_applicable', 'awaiting_payment')"
                         confirm="Submit this document to ZIMRA now? A fiscalised document can only be corrected with a credit or debit note."
                         />
@@ -26,37 +25,8 @@
                         type="object"
                         groups="fiscalisation.admin_fiscalisation"
                         invisible="fiscalised or fiscal_state not in ('failed', 'blocked', 'needs_check')"
-                        confirm="Put this document back in the fiscalisation queue? For 'Needs Check' documents, first confirm on FDMS that no receipt exists, otherwise a duplicate may be issued."
+                        confirm="Send this document to ZIMRA again? If ZIMRA already issued a receipt for it, that receipt is recorded instead of a new one."
                         />
-                </xpath>
-
-                <xpath expr="//sheet" position="before">
-                    <div class="alert alert-info mb-0" role="status"
-                         invisible="fiscal_state not in ('awaiting_payment', 'awaiting_original', 'pending', 'submitting')">
-                        <field name="fiscal_state" widget="badge" readonly="1" nolabel="1"/>
-                        <span invisible="fiscal_state != 'awaiting_payment'"> This invoice will be fiscalised with ZIMRA automatically once a payment is linked to it.</span>
-                        <span invisible="fiscal_state != 'awaiting_original'"> This credit note will be fiscalised once the invoice it credits has been fiscalised.</span>
-                        <span invisible="fiscal_state != 'pending'"> Queued for fiscalisation with ZIMRA.</span>
-                        <span invisible="fiscal_state != 'submitting'"> Being submitted to ZIMRA.</span>
-                        <div invisible="not fiscal_issues" class="text-warning mt-1">
-                            <strong>Pre-check issues: </strong><field name="fiscal_issues" readonly="1" nolabel="1"/>
-                        </div>
-                        <div invisible="fiscal_state != 'pending' or not fiscal_last_error" class="text-muted mt-1">
-                            Last attempt: <field name="fiscal_last_error" readonly="1" nolabel="1"/>
-                            (next try <field name="fiscal_next_attempt" readonly="1" nolabel="1"/>)
-                        </div>
-                    </div>
-                    <div class="alert alert-danger mb-0" role="alert"
-                         invisible="fiscal_validation != 'invalid'">
-                        <strong>ZIMRA marked this receipt as invalid.</strong>
-                        FDMS will not close the fiscal day automatically until it is resolved on FDMS.
-                        <div><field name="fiscal_validation_errors" readonly="1" nolabel="1"/></div>
-                    </div>
-                    <div class="alert alert-danger mb-0" role="alert"
-                         invisible="fiscal_state not in ('failed', 'blocked', 'needs_check')">
-                        <strong>ZIMRA fiscalisation: <field name="fiscal_state" readonly="1" nolabel="1"/></strong>
-                        <div><field name="fiscal_last_error" readonly="1" nolabel="1"/></div>
-                    </div>
                 </xpath>
 
                 <xpath expr="//notebook" position="inside">
